@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { FACULTY_SAR_TABLES, GENERAL_INFORMATION_FIELDS, SAR_MAX_MARKS, SUMMARY_PARAMETERS } from "../config";
+import { AUTHORITY_NAV_ITEMS, AuthorityAppraisalForms } from "../authority";
 import "./FacultySarForm.css";
 
 const emptyValueFor = (column) => (column.type === "static" ? column.value || "" : "");
@@ -241,6 +242,7 @@ export default function FacultySarForm() {
       { id: "general-information", label: "General" },
       ...FACULTY_SAR_TABLES.map((section) => ({ id: section.sectionId, label: `${section.number}. ${section.title}` })),
       { id: "summary", label: "Summary" },
+      ...AUTHORITY_NAV_ITEMS,
     ],
     [],
   );
@@ -418,6 +420,8 @@ export default function FacultySarForm() {
           </div>
         </div>
       </section>
+
+      <AuthorityAppraisalForms />
     </main>
   );
 }
