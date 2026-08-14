@@ -16,6 +16,7 @@ export default function DeanAppraisal() {
           <p className="sar-eyebrow">Authority Appraisal</p>
           <h2>Dean (School) Appraisal Sheet</h2>
         </div>
+        <span className="sar-max-marks-badge">Max Marks <strong>25</strong></span>
       </div>
 
       <RatingGrid

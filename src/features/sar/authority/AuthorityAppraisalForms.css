@@ -65,11 +65,26 @@
   text-align: left;
 }
 
+/* The app-wide .appraisal-form-shell skin pins every table's first column to
+   72px, assuming a Sr.No index. These tables lead with a text label instead,
+   so restore natural width for just that column. */
+.appraisal-form-shell .sar-rating-table th:first-child,
+.appraisal-form-shell .sar-rating-table td:first-child,
+.appraisal-form-shell .sar-final-summary-table th:first-child,
+.appraisal-form-shell .sar-final-summary-table td:first-child,
+.appraisal-form-shell .sar-leave-table th:first-child,
+.appraisal-form-shell .sar-leave-table td:first-child {
+  width: auto !important;
+  min-width: 190px !important;
+  max-width: none !important;
+  white-space: normal !important;
+}
+
 .sar-rating-cell input[type="radio"] {
   width: 18px;
   height: 18px;
   cursor: pointer;
-  accent-color: #2f6f9f;
+  accent-color: var(--fa-primary, #5b5ceb);
 }
 
 .sar-authority-footer {

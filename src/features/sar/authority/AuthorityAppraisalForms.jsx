@@ -17,12 +17,14 @@ export default function AuthorityAppraisalForms() {
         title="Evaluation of Administrative Responsibility — Part A"
         subtitle="To be filled by only Head of Departments (01 Mark each)"
         parameters={ADMIN_RESPONSIBILITY_PART_A}
+        maxMarks={25}
       />
       <AdministrativeResponsibility
         id="admin-responsibility-b"
         title="Evaluation of Administrative Responsibility — Part B"
         subtitle="To be filled by only Deans and All Functional Heads (01 Mark each)"
         parameters={ADMIN_RESPONSIBILITY_PART_B}
+        maxMarks={25}
       />
       <DeanAppraisal />
       <VcAppraisal />

@@ -21,6 +21,7 @@ export default function FinalSummary() {
           <p className="sar-eyebrow">Summary</p>
           <h2>Summary</h2>
         </div>
+        <span className="sar-max-marks-badge">Overall <strong>400</strong></span>
       </div>
 
       <div className="sar-general-grid">

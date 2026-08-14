@@ -1,20 +1,27 @@
 .sar-page {
   min-height: 100vh;
-  background: #f5f7fb;
-  color: #142033;
-  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--fa-bg, #f8fafc);
+  color: var(--fa-text, #111827);
   padding: 28px min(4vw, 56px) 48px;
 }
 
 .sar-hero,
 .sar-panel,
 .sar-section {
-  max-width: 1320px;
+  max-width: 1600px;
   margin: 0 auto 20px;
-  background: #ffffff;
-  border: 1px solid #dce5ef;
-  border-radius: 8px;
-  box-shadow: 0 14px 34px rgba(21, 35, 55, 0.06);
+  background: var(--fa-surface, #ffffff);
+  border: 1px solid var(--fa-border, #e5e7eb);
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04), 0 10px 28px rgba(17, 24, 39, 0.06);
+  overflow: hidden;
+  transition: box-shadow 200ms ease, transform 200ms ease;
+}
+
+.sar-hero:hover,
+.sar-panel:hover,
+.sar-section:hover {
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.05), 0 22px 44px rgba(17, 24, 39, 0.10);
 }
 
 .sar-hero {
@@ -22,18 +29,17 @@
   justify-content: space-between;
   gap: 24px;
   align-items: center;
-  padding: 28px 32px;
-  border-top: 4px solid #2f6f9f;
+  padding: 20px 24px;
 }
 
 .sar-eyebrow {
   margin: 0 0 8px;
-  color: #2f6f9f;
+  color: var(--fa-primary-dark, #4f46e5);
   font-size: 12px;
   line-height: 1.3;
-  font-weight: 850;
+  font-weight: 800;
   text-transform: uppercase;
-  letter-spacing: 0;
+  letter-spacing: 0.4px;
 }
 
 .sar-hero h1,
@@ -42,31 +48,31 @@
 .sar-group h3,
 .sar-table-card h4 {
   margin: 0;
-  color: #10233a;
+  color: var(--fa-text, #111827);
   letter-spacing: 0;
 }
 
 .sar-hero h1 {
-  font-size: 31px;
-  line-height: 1.16;
+  font-size: 28px;
+  line-height: 1.14;
   font-weight: 900;
 }
 
 .sar-hero__copy {
   max-width: 760px;
   margin: 10px 0 0;
-  color: #5c6d80;
+  color: var(--fa-text-secondary, #6b7280);
   font-size: 14px;
   line-height: 1.55;
 }
 
 .sar-hero__marks {
   min-width: 150px;
-  border: 1px solid #c5d8e9;
-  border-radius: 8px;
+  border: 1px solid var(--fa-border, #e5e7eb);
+  border-radius: 10px;
   padding: 15px 18px;
-  background: #f1f7fc;
-  color: #235579;
+  background: var(--fa-hover, #eef2ff);
+  color: var(--fa-primary-dark, #4f46e5);
   display: grid;
   justify-items: center;
   gap: 2px;
@@ -84,7 +90,7 @@
 }
 
 .sar-nav {
-  max-width: 1320px;
+  max-width: 1600px;
   margin: 0 auto 20px;
   display: flex;
   gap: 8px;
@@ -94,14 +100,22 @@
 
 .sar-nav a {
   flex: 0 0 auto;
-  background: #ffffff;
-  border: 1px solid #dce5ef;
+  background: var(--fa-surface, #ffffff);
+  border: 1px solid var(--fa-border, #e5e7eb);
   border-radius: 8px;
-  color: #38536d;
+  color: var(--fa-text-secondary, #6b7280);
   text-decoration: none;
   padding: 9px 11px;
   font-size: 12px;
   font-weight: 800;
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.sar-nav a:hover {
+  opacity: 1;
+  background: var(--fa-hover, #eef2ff);
+  border-color: var(--fa-primary, #5b5ceb);
+  color: var(--fa-primary-dark, #4f46e5);
 }
 
 .sar-panel,
@@ -121,7 +135,7 @@
 .sar-signature-grid label {
   display: grid;
   gap: 7px;
-  color: #47576a;
+  color: var(--fa-text-secondary, #6b7280);
   font-size: 12px;
   font-weight: 800;
 }
@@ -141,32 +155,75 @@
 }
 
 .sar-panel__heading {
-  margin-bottom: 20px;
+  margin: -24px -24px 20px;
+  padding: 18px 24px;
+  background: #fbfcfd;
+  border-bottom: 1px solid var(--fa-border, #e5e7eb);
 }
 
 .sar-section__heading {
-  padding-bottom: 16px;
-  border-bottom: 1px solid #e4ebf3;
-  margin-bottom: 18px;
+  margin: -24px -24px 18px;
+  padding: 18px 24px;
+  background: #fbfcfd;
+  border-bottom: 1px solid var(--fa-border, #e5e7eb);
 }
 
 .sar-section__heading p {
   margin: 5px 0 0;
-  color: #657589;
+  color: var(--fa-text-secondary, #6b7280);
   font-size: 13px;
+  font-weight: 700;
+}
+
+.sar-section__heading-main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.sar-panel h2,
+.sar-section h2 {
+  font-size: 18px;
   font-weight: 800;
+  color: var(--fa-primary-dark, #4f46e5);
 }
 
 .sar-section__number {
-  width: 38px;
-  height: 38px;
-  border-radius: 8px;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
   display: grid;
   place-items: center;
-  background: #e8f2fb;
-  color: #235579;
+  background: rgba(79, 70, 229, 0.10);
+  color: var(--fa-primary-dark, #4f46e5);
+  border: 1px solid rgba(79, 70, 229, 0.16);
   font-weight: 900;
   flex: 0 0 auto;
+}
+
+.sar-max-marks-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  background: #f8fafc;
+  border: 1px solid var(--fa-border, #e5e7eb);
+  border-radius: 10px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--fa-text-secondary, #6b7280);
+}
+
+.sar-max-marks-badge strong {
+  background: var(--fa-hover, #eef2ff);
+  color: var(--fa-primary-dark, #4f46e5);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
 }
 
 .sar-general-grid {
@@ -183,19 +240,21 @@
   width: 100%;
   min-width: 0;
   min-height: 38px;
-  border: 1px solid #cdd8e5;
-  border-radius: 6px;
-  background: #ffffff;
-  color: #142033;
+  border-radius: 5px;
+  border: 1px solid #d8deea;
+  background: #fcfdff;
+  color: var(--fa-text, #111827);
   padding: 8px 10px;
   font: inherit;
   font-size: 13px;
   outline: none;
+  box-shadow: inset 0 1px 0 rgba(17, 24, 39, 0.03), 0 1px 2px rgba(17, 24, 39, 0.04);
 }
 
 .sar-input:focus {
-  border-color: #2f6f9f;
-  box-shadow: 0 0 0 3px rgba(47, 111, 159, 0.13);
+  background: #ffffff;
+  border-color: var(--fa-primary, #5b5ceb);
+  box-shadow: 0 0 0 4px rgba(91, 92, 235, 0.14), 0 8px 18px rgba(17, 24, 39, 0.08);
 }
 
 .sar-textarea,
@@ -217,8 +276,8 @@
 }
 
 .sar-group {
-  border: 1px solid #e1e9f1;
-  border-radius: 8px;
+  border: 1px solid var(--fa-border, #e5e7eb);
+  border-radius: 10px;
   padding: 16px;
   background: #fbfdff;
 }
@@ -229,20 +288,21 @@
 
 .sar-group__heading span,
 .sar-table-card__header span,
-.sar-total-pill {
-  border: 1px solid #c7d9ea;
-  border-radius: 8px;
-  padding: 6px 9px;
-  background: #f1f7fc;
-  color: #255a83;
+.sar-total-pill,
+.sar-max-marks-badge {
+  border: 1px solid var(--fa-border, #e5e7eb);
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: var(--fa-hover, #eef2ff);
+  color: var(--fa-primary-dark, #4f46e5);
   font-size: 12px;
-  font-weight: 850;
+  font-weight: 800;
   white-space: nowrap;
 }
 
 .sar-criteria {
   border: 1px solid #dde8d7;
-  border-radius: 8px;
+  border-radius: 10px;
   background: #f8fbf5;
   padding: 12px 14px;
   margin: 0 0 14px;
@@ -287,49 +347,87 @@
   text-align: center;
 }
 
+/* The app-wide .appraisal-form-shell skin pins every table's first column to
+   72px, assuming a Sr.No index. This table leads with a text label instead,
+   so restore natural width for just that column. */
+.appraisal-form-shell .sar-guideline-table th:first-child,
+.appraisal-form-shell .sar-guideline-table td:first-child {
+  width: auto !important;
+  min-width: 150px !important;
+  max-width: none !important;
+  white-space: normal !important;
+}
+
 .sar-table-card__header p {
   margin: 5px 0 0;
-  color: #657589;
+  color: var(--fa-text-secondary, #6b7280);
   font-size: 12px;
   line-height: 1.45;
 }
 
 .sar-table-wrap {
   overflow-x: auto;
-  border: 1px solid #dce5ef;
   border-radius: 8px;
-  background: #ffffff;
 }
 
 .sar-table {
   width: 100%;
   min-width: 920px;
-  border-collapse: collapse;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--fa-border, #e5e7eb);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgba(17, 24, 39, 0.04);
 }
 
 .sar-table th,
 .sar-table td {
-  border-bottom: 1px solid #e5edf5;
-  border-right: 1px solid #e5edf5;
-  padding: 8px;
-  vertical-align: top;
+  border: none;
+  border-bottom: 1px solid #f1f5f9;
+  border-right: 1px solid #f1f5f9;
+  padding: 10px;
+  vertical-align: middle;
 }
 
 .sar-table th {
-  background: #eef4f9;
-  color: #314962;
-  font-size: 11px;
+  background: #f8fafc;
+  color: #1e1b4b;
+  font-size: 11.5px;
   line-height: 1.25;
-  font-weight: 900;
+  font-weight: 800;
   text-align: left;
+  white-space: normal;
+}
+
+.sar-table th:last-child,
+.sar-table td:last-child {
+  border-right: none;
 }
 
 .sar-table td {
   background: #ffffff;
 }
 
+.sar-table td:has(input),
+.sar-table td:has(select),
+.sar-table td:has(textarea) {
+  background: #fbfcff;
+}
+
 .sar-table tr:last-child td {
   border-bottom: none;
+}
+
+.sar-table tbody tr:hover td {
+  background: #f8fafc;
+}
+
+.sar-table tbody tr:hover td:has(input),
+.sar-table tbody tr:hover td:has(select),
+.sar-table tbody tr:hover td:has(textarea) {
+  background: #f1f5ff;
 }
 
 .sar-sr-col {
@@ -355,24 +453,34 @@
 .sar-row-actions {
   display: flex;
   gap: 10px;
+  margin-top: 12px;
 }
 
-.sar-row-actions button {
-  min-height: 36px;
-  border: 1px solid #2f6f9f;
-  border-radius: 7px;
-  background: #ffffff;
-  color: #245a83;
-  padding: 7px 12px;
+.sar-row-actions__button {
+  min-height: 38px;
+  border-radius: 8px;
+  padding: 8px 18px;
   font: inherit;
-  font-size: 12px;
-  font-weight: 850;
+  font-size: 13px;
+  font-weight: 700;
   cursor: pointer;
+  background: #ffffff;
 }
 
-.sar-row-actions button:disabled {
-  border-color: #c9d4df;
-  color: #98a5b3;
+.sar-row-actions__button--add {
+  border: 1.5px solid var(--fa-primary, #5b5ceb);
+  color: var(--fa-primary-dark, #4f46e5);
+}
+
+.sar-row-actions__button--remove {
+  border: 1.5px solid #fecaca;
+  color: var(--fa-error, #ef4444);
+}
+
+.sar-row-actions__button:disabled {
+  border-color: #cbd5e1 !important;
+  color: #94a3b8 !important;
+  background: #f1f5f9 !important;
   cursor: not-allowed;
 }
 
@@ -381,21 +489,22 @@
 }
 
 .sar-total-row td {
-  background: #f4f8fb;
-  font-weight: 900;
+  background: #f0f3ff !important;
+  color: #3730a3 !important;
+  font-weight: 800 !important;
 }
 
 .sar-declaration {
   margin-top: 18px;
-  border: 1px solid #dce5ef;
-  border-radius: 8px;
+  border: 1px solid var(--fa-border, #e5e7eb);
+  border-radius: 10px;
   padding: 16px;
   background: #fbfdff;
 }
 
 .sar-declaration p {
   margin: 0 0 16px;
-  color: #405168;
+  color: var(--fa-text-secondary, #6b7280);
   font-size: 14px;
   line-height: 1.55;
 }
@@ -414,7 +523,17 @@
   align-items: flex-end;
   padding-bottom: 5px;
   font-size: 12px;
-  font-weight: 850;
+  font-weight: 800;
+}
+
+@media (max-width: 1180px) {
+  .sar-general-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sar-field--wide {
+    grid-column: span 2;
+  }
 }
 
 @media (max-width: 900px) {
@@ -443,5 +562,28 @@
 
   .sar-hero h1 {
     font-size: 24px;
+  }
+
+  .sar-max-marks-badge {
+    align-self: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  .sar-hero h1 {
+    font-size: 21px;
+  }
+
+  .sar-panel h2,
+  .sar-section h2 {
+    font-size: 16px;
+  }
+
+  .sar-row-actions {
+    flex-direction: column;
+  }
+
+  .sar-row-actions__button {
+    width: 100%;
   }
 }

@@ -7,7 +7,7 @@ const emptyLeaveRow = () => Object.fromEntries(LEAVE_COLUMNS.map((column) => [co
 function LeaveTable({ taken, onTakenChange, outOf, onOutOfChange }) {
   return (
     <div className="sar-table-wrap">
-      <table className="sar-table">
+      <table className="sar-table sar-leave-table">
         <thead>
           <tr>
             <th>No. of leaves taken in the Year</th>
@@ -71,6 +71,7 @@ export default function RegistrarAppraisal() {
           <p className="sar-eyebrow">Authority Appraisal</p>
           <h2>Registrar Appraisal Sheet</h2>
         </div>
+        <span className="sar-max-marks-badge">Max Marks <strong>25</strong></span>
       </div>
 
       <div className="sar-rating-legend">

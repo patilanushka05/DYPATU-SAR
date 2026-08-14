@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import { FACULTY_SAR_TABLES, GENERAL_INFORMATION_FIELDS, SAR_MAX_MARKS, SUMMARY_PARAMETERS } from "../config";
-import { AUTHORITY_NAV_ITEMS, AuthorityAppraisalForms } from "../authority";
 import "./FacultySarForm.css";
 
 const emptyValueFor = (column) => (column.type === "static" ? column.value || "" : "");
@@ -179,8 +178,21 @@ function SarTable({ table, rows, onCellChange, onAddRow, onRemoveRow }) {
 
       {!table.fixedRows && (
         <div className="sar-row-actions">
-          <button type="button" onClick={() => onAddRow(table)}>Add Row</button>
-          <button type="button" onClick={() => onRemoveRow(table)} disabled={rows.length <= 1}>Remove Last Row</button>
+          <button
+            type="button"
+            className="sar-row-actions__button sar-row-actions__button--add appraisal-add-row-button"
+            onClick={() => onAddRow(table)}
+          >
+            Add Row
+          </button>
+          <button
+            type="button"
+            className="sar-row-actions__button sar-row-actions__button--remove appraisal-danger-button"
+            onClick={() => onRemoveRow(table)}
+            disabled={rows.length <= 1}
+          >
+            Remove Last Row
+          </button>
         </div>
       )}
     </section>
@@ -191,11 +203,11 @@ function SectionBlock({ section, tableData, onCellChange, onAddRow, onRemoveRow 
   return (
     <article className="sar-section" id={section.sectionId}>
       <div className="sar-section__heading">
-        <div className="sar-section__number">{section.number}</div>
-        <div>
+        <div className="sar-section__heading-main">
+          <div className="sar-section__number">{section.number}</div>
           <h2>{section.title}</h2>
-          <p>Maximum marks: {section.maxMarks}</p>
         </div>
+        <span className="sar-max-marks-badge">Max Marks <strong>{section.maxMarks}</strong></span>
       </div>
 
       <CriteriaList items={section.criteria} />
@@ -242,7 +254,6 @@ export default function FacultySarForm() {
       { id: "general-information", label: "General" },
       ...FACULTY_SAR_TABLES.map((section) => ({ id: section.sectionId, label: `${section.number}. ${section.title}` })),
       { id: "summary", label: "Summary" },
-      ...AUTHORITY_NAV_ITEMS,
     ],
     [],
   );
@@ -276,7 +287,7 @@ export default function FacultySarForm() {
   };
 
   return (
-    <main className="sar-page">
+    <div className="sar-page appraisal-form-shell">
       <header className="sar-hero">
         <div>
           <p className="sar-eyebrow">D. Y. Patil Agriculture and Technical University, Talsande, Kolhapur</p>
@@ -420,8 +431,6 @@ export default function FacultySarForm() {
           </div>
         </div>
       </section>
-
-      <AuthorityAppraisalForms />
-    </main>
+    </div>
   );
 }

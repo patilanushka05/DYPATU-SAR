@@ -18,6 +18,7 @@ export default function VcAppraisal() {
           <p className="sar-eyebrow">Authority Appraisal</p>
           <h2>Appraisal Sheet (To be Filed by Vice Chancellor)</h2>
         </div>
+        <span className="sar-max-marks-badge">Max Marks <strong>25</strong></span>
       </div>
 
       <RatingGrid

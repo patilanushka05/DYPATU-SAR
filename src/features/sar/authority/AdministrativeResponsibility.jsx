@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-export default function AdministrativeResponsibility({ id, title, subtitle, parameters }) {
+export default function AdministrativeResponsibility({ id, title, subtitle, parameters, maxMarks }) {
   const [rows, setRows] = useState(() => parameters.map(() => ({ selfScore: "", deanScore: "", vcScore: "" })));
 
   const updateCell = (rowIndex, key, value) => {
@@ -14,6 +14,7 @@ export default function AdministrativeResponsibility({ id, title, subtitle, para
           <p className="sar-eyebrow">Evaluation of Administrative Responsibility (25 Marks)</p>
           <h2>{title}</h2>
         </div>
+        {maxMarks !== undefined && <span className="sar-max-marks-badge">Max Marks <strong>{maxMarks}</strong></span>}
       </div>
 
       {subtitle && <p className="sar-authority-subtitle">{subtitle}</p>}
