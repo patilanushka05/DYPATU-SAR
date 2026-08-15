@@ -205,10 +205,16 @@ function SidebarIcon({ id, active, label }) {
 function SectionIcon({ section }) {
   const labels = {
     partA: "A",
-    partB: "B",
-    partC: "C",
-    partD: "D",
-    partE: "E",
+    sec1: "1",
+    sec2: "2",
+    sec3: "3",
+    sec4: "4",
+    sec5: "5",
+    sec6: "6",
+    sec7: "7",
+    sec8: "8",
+    sec9: "9",
+    sec10: "10",
     summary: "S",
   };
 
@@ -244,18 +250,24 @@ export default function DashboardSidebar({
   const showCurrentYearSectionSelector = showSectionSelector && !isLegacyTwoPartYear;
   const sectionOptions = isLegacyTwoPartYear
     ? [
-        ["partA", "Part A"],
-        ["partB", "Part B"],
+        ["partA", "Part A — General Information"],
+        ["sec1", "Section 1 — Teaching-Learning Process"],
       ]
     : [
-        ["partA", "Part A"],
-        ["partB", "Part B"],
-        ["partC", "Part C"],
-        ["partD", "Part D"],
-        ["partE", "Part E"],
-        ["summary", "Summary"],
+        ["partA", "Part A — General Information"],
+        ["sec1", "Section 1 — Teaching-Learning Process"],
+        ["sec2", "Section 2 — Feedback from Students"],
+        ["sec3", "Section 3 — Administrative Responsibilities"],
+        ["sec4", "Section 4 — Evaluation & Assessment"],
+        ["sec5", "Section 5 — Extension & Outreach"],
+        ["sec6", "Section 6 — Domain Specific Activities"],
+        ["sec7", "Section 7 — Student Mentoring"],
+        ["sec8", "Section 8 — Collaborations"],
+        ["sec9", "Section 9 — Research Activity"],
+        ["sec10", "Section 10 — Personal Attributes"],
+        ["summary", "Summary of Evaluation Marks"],
       ];
-  const selectedSectionLabel = sectionOptions.find(([value]) => value === sectionTab)?.[1] || "Part A";
+  const selectedSectionLabel = sectionOptions.find(([value]) => value === sectionTab)?.[1] || "Part A — General Information";
 
   useEffect(() => {
     const syncAcademicYear = (event) => {

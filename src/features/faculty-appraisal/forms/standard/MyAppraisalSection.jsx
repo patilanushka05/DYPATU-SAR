@@ -3,6 +3,7 @@ import StandardMyAppraisal from "./StandardMyAppraisal";
 export default function MyAppraisalSection({
   sectionTab,
   onSectionTabChange,
+  showSectionSelector = true,
   defaultDesignation = "",
   defaultAcademicYear,
   titleNameFallback = "Faculty",
@@ -12,6 +13,7 @@ export default function MyAppraisalSection({
     <StandardMyAppraisal
       sectionTab={sectionTab}
       onSectionTabChange={onSectionTabChange}
+      showSectionSelector={showSectionSelector}
       defaultDesignation={defaultDesignation}
       defaultAcademicYear={defaultAcademicYear}
       titleNameFallback={titleNameFallback}

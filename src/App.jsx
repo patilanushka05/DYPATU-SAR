@@ -61,7 +61,6 @@ const ResetPassword = lazy(() => import("./pages/ResetPassword"));
 const FacultyProfile = lazy(() => import("./pages/FacultyProfile"));
 const EditProfile  = lazy(() => import("./pages/EditProfile"));
 const RoleDashboard = lazy(() => import("./pages/RoleDashboard"));
-const FacultySarForm = lazy(() => import("./features/sar/forms/FacultySarForm"));
 
 // - Shared loading screen -
 function PageLoader({ message = "Loading..." }) {
@@ -225,7 +224,6 @@ export default function App() {
     <ErrorBoundary>
       <Suspense fallback={<PageLoader />}>
         <Routes>
-          <Route path="/dypatu-sar" element={<FacultySarForm />} />
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
           <Route path="/reset-password" element={<ResetPassword />} />

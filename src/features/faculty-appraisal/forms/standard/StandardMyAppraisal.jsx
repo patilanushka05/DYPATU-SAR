@@ -1,51 +1,24 @@
-/* eslint-disable no-unused-vars, react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
+/* eslint-disable no-unused-vars */
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../../../services/api";
 import { getActiveAcademicYear, getSessionItem, setActiveAcademicYear } from "../../../../auth/session";
 import {
-  appraisalWindowMessage,
-  appraisalWindowErrorMessage,
   canEditSelfAppraisal,
-  canSaveDraft,
-  canSubmitAppraisal,
-  getAppraisalWindowStatus,
 } from "../../../../services/appraisalWindowService";
 import {
-  ACR_DETAIL_POINTS,
   APP_INFO,
-  createAcrRows,
 } from "../../config";
 import {
-  loadClosedAppraisal,
   loadAppraisalDocuments,
   loadSavedAppraisal,
   saveAppraisalDraftSection,
   submitAppraisal,
 } from "../../services";
 import {
-  SCORE_LIMITS,
-  averageSectionScore,
   clampScore,
-  consultancyGuidelineScore,
-  effectiveMaxScore,
-  externalProjectGuidelineScore,
-  feedbackAverage,
-  feedbackGuidelineScore,
-  feedbackSectionScore,
   isValidDDMMYYYY,
-  lectureGuidelineScore,
   maskDateDDMMYYYY,
-  normalizeAutoScores,
-  projectGuidanceRowMax,
-  researchGuidanceRowMax,
-  researchGuidanceScore,
-  selfEffectivePartAMax,
-  societyRowLocked,
-  societyRowScore,
-  stripMaxMarksFromTitle,
-  sumSectionScore,
-  validateCompleteRows,
 } from "../../utils";
 import {
   AppraisalHeaderImage,
@@ -53,9 +26,6 @@ import {
   RejectionNotice,
   RowButtons as RowBtns,
   SectionCard as SC,
-  SectionInfoButton,
-  SectionSaveFooter,
-  SummaryOtherInfoField,
   T,
   TD,
   TDC,
@@ -64,3470 +34,2041 @@ import {
   ViewCell,
 } from "../../components";
 import {
-  n,
-  pct,
-  reportExperience,
-  reportQualification,
-  reportTextValue,
   RO,
   TI,
   WorkflowStatusTracker,
 } from "../../shared";
 import {
-  getReviewChain,
-  hasActiveRejection,
-  pendingStatusFor,
   profileFromsessionStorage,
-  reviewListFrom,
   roleLabel,
-  workflowValidationError,
 } from "../../../../utils/hierarchy";
 import { getSchoolByValue } from "../../../../constants/universityHierarchy";
-import { fetchImageAsDataUrl } from "../../../../utils/fullFormReport";
-import LegacyPreviousYearReport from "./LegacyPreviousYearReport";
-import {
-  isLegacyTwoPartAcademicYear,
-  legacySubmittedTotals,
-} from "./legacyPreviousYearReportUtils";
+import { openSarReport } from "./sarReport";
 
-const OTHER_INNOVATIVE_METHOD = "Any other innovative method";
-
-const INNOVATIVE_METHOD_OPTIONS = [
-  { value: "Blended learning", label: "Blended learning" },
-  { value: "Virtual Lab", label: "Virtual Lab" },
-  { value: "Conceptual videos (with class photo)", label: "Conceptual videos (with class photo)" },
-  { value: "Use of Learning Management System (LMS)", label: "Use of Learning Management System (LMS)" },
-  { value: "Project-Based Learning", label: "Project-Based Learning" },
-  { value: "Open Course Ware (OCW) assignment", label: "Open Course Ware (OCW) assignment" },
-  { value: "Quiz", label: "Quiz" },
-  { value: "Group Discussion (with photo & report)", label: "Group Discussion (with photo & report)" },
-  { value: "Flip classroom (with proof of material shared)", label: "Flip classroom (with proof of material shared)" },
-  { value: OTHER_INNOVATIVE_METHOD, label: OTHER_INNOVATIVE_METHOD },
-];
-
-const LEGACY_INNOVATIVE_METHODS = new Set(INNOVATIVE_METHOD_OPTIONS.map((method) => method.value));
-
-const blankInnovativeRow = () => ({ method: "", details: "", methodOther: "", score: "", max: A3_INNOVATIVE_ROW_MAX });
-
-const sanitizeInnovativeRows = (rows) => {
-  if (!Array.isArray(rows)) return [blankInnovativeRow()];
-  const legacyPresetRows = rows.slice(0, INNOVATIVE_METHOD_OPTIONS.length);
-  const hasLegacyPreset = legacyPresetRows.length === INNOVATIVE_METHOD_OPTIONS.length
-    && legacyPresetRows.every((row = {}, index) => String(row.method ?? "").trim() === INNOVATIVE_METHOD_OPTIONS[index].value);
-  const cleaned = rows.filter((row = {}, index) => {
-    const method = String(row.method ?? "").trim();
-    const hasEnteredData = ["details", "methodOther", "score", "hod", "director", "dean", "vc"].some((key) => String(row[key] ?? "").trim());
-    if (hasLegacyPreset && index < INNOVATIVE_METHOD_OPTIONS.length && LEGACY_INNOVATIVE_METHODS.has(method) && !hasEnteredData) return false;
-    return method || hasEnteredData;
-  });
-  const normalizedRows = cleaned.map((row) => ({ ...row, max: row.max || A3_INNOVATIVE_ROW_MAX }));
-  return normalizedRows.length ? normalizedRows : [blankInnovativeRow()];
-};
-
-// Row-wise scores may legitimately sum above a section's max (e.g. multiple qualifying
-// entries) - the actual stored/displayed total is already capped at the section max
-// elsewhere via clampScore-based aggregation, so validation must not also block submission
-// for that. `rowMax: section.rowMax || 0` additionally stops validateCompleteRows' own
-// title-text fallback (matching "FDP"/"industrial training" in a label) from inventing a
-// row cap for sections that never defined one.
-const withRelaxedSectionCap = (sections) =>
-  sections.map((section) => ({ ...section, rowMax: section.rowMax || 0, capSectionTotal: true }));
-
-const textEncoder = new TextEncoder();
-const crcTable = (() => {
-  const table = new Uint32Array(256);
-  for (let i = 0; i < 256; i += 1) {
-    let c = i;
-    for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    table[i] = c >>> 0;
-  }
-  return table;
-})();
-
-const crc32 = (bytes) => {
-  let crc = 0xffffffff;
-  for (let i = 0; i < bytes.length; i += 1) {
-    crc = crcTable[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-};
-
-const dosDateTime = (date = new Date()) => ({
-  time: ((date.getHours() & 0x1f) << 11) | ((date.getMinutes() & 0x3f) << 5) | ((Math.floor(date.getSeconds() / 2)) & 0x1f),
-  date: (((date.getFullYear() - 1980) & 0x7f) << 9) | (((date.getMonth() + 1) & 0x0f) << 5) | (date.getDate() & 0x1f),
-});
-
-const writeZipHeader = (size, writer) => {
-  const bytes = new Uint8Array(size);
-  const view = new DataView(bytes.buffer);
-  writer(view);
-  return bytes;
-};
-
-const createZipBlob = async (entries) => {
-  const parts = [];
-  const centralParts = [];
-  let offset = 0;
-  const stamp = dosDateTime();
-
-  for (const entry of entries) {
-    const nameBytes = textEncoder.encode(entry.name);
-    const dataBytes = new Uint8Array(await entry.blob.arrayBuffer());
-    const crc = crc32(dataBytes);
-
-    const localHeader = writeZipHeader(30, (view) => {
-      view.setUint32(0, 0x04034b50, true);
-      view.setUint16(4, 20, true);
-      view.setUint16(6, 0, true);
-      view.setUint16(8, 0, true);
-      view.setUint16(10, stamp.time, true);
-      view.setUint16(12, stamp.date, true);
-      view.setUint32(14, crc, true);
-      view.setUint32(18, dataBytes.length, true);
-      view.setUint32(22, dataBytes.length, true);
-      view.setUint16(26, nameBytes.length, true);
-      view.setUint16(28, 0, true);
-    });
-
-    parts.push(localHeader, nameBytes, dataBytes);
-
-    const centralHeader = writeZipHeader(46, (view) => {
-      view.setUint32(0, 0x02014b50, true);
-      view.setUint16(4, 20, true);
-      view.setUint16(6, 20, true);
-      view.setUint16(8, 0, true);
-      view.setUint16(10, 0, true);
-      view.setUint16(12, stamp.time, true);
-      view.setUint16(14, stamp.date, true);
-      view.setUint32(16, crc, true);
-      view.setUint32(20, dataBytes.length, true);
-      view.setUint32(24, dataBytes.length, true);
-      view.setUint16(28, nameBytes.length, true);
-      view.setUint16(30, 0, true);
-      view.setUint16(32, 0, true);
-      view.setUint16(34, 0, true);
-      view.setUint16(36, 0, true);
-      view.setUint32(38, 0, true);
-      view.setUint32(42, offset, true);
-    });
-
-    centralParts.push(centralHeader, nameBytes);
-    offset += localHeader.length + nameBytes.length + dataBytes.length;
-  }
-
-  const centralSize = centralParts.reduce((total, part) => total + part.length, 0);
-  const endHeader = writeZipHeader(22, (view) => {
-    view.setUint32(0, 0x06054b50, true);
-    view.setUint16(4, 0, true);
-    view.setUint16(6, 0, true);
-    view.setUint16(8, entries.length, true);
-    view.setUint16(10, entries.length, true);
-    view.setUint32(12, centralSize, true);
-    view.setUint32(16, offset, true);
-    view.setUint16(20, 0, true);
-  });
-
-  return new Blob([...parts, ...centralParts, endHeader], { type: "application/zip" });
-};
-
-const dataUrlToBlob = (dataUrl) => {
-  const [meta, value = ""] = String(dataUrl).split(",");
-  const mime = meta.match(/:(.*?);/)?.[1] || "application/octet-stream";
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return new Blob([bytes], { type: mime });
-};
-
-const rawAttachmentUrl = (file) =>
-  typeof file === "string" ? file : file?.url || file?.file_url || file?.fileUrl || file?.document_url || file?.documentUrl || file?.path || file?.location;
-
-const attachmentFileName = (file, fallbackName, usedNames) => {
-  const rawUrl = rawAttachmentUrl(file) || "";
-  const rawName = typeof file === "object" && file?.name ? file.name : rawUrl.split(/[/?#]/).filter(Boolean).pop() || fallbackName;
-  const cleaned = String(rawName || fallbackName)
-    .split("")
-    .map((char) => (char.charCodeAt(0) < 32 || /[<>:"/\\|?*]/.test(char) ? "_" : char))
-    .join("")
-    .trim() || fallbackName;
-  if (!usedNames.has(cleaned)) {
-    usedNames.add(cleaned);
-    return cleaned;
-  }
-
-  const dotIndex = cleaned.lastIndexOf(".");
-  const base = dotIndex > 0 ? cleaned.slice(0, dotIndex) : cleaned;
-  const ext = dotIndex > 0 ? cleaned.slice(dotIndex) : "";
-  let count = 2;
-  let next = `${base}-${count}${ext}`;
-  while (usedNames.has(next)) {
-    count += 1;
-    next = `${base}-${count}${ext}`;
-  }
-  usedNames.add(next);
-  return next;
-};
-
-const fetchAttachmentBlob = async (file) => {
-  const rawUrl = rawAttachmentUrl(file);
-  const finalUrl = rawUrl ? api.getFileUrl(rawUrl) : "";
-  if (!finalUrl) throw new Error("Attachment URL is missing.");
-  if (finalUrl.startsWith("data:")) return dataUrlToBlob(finalUrl);
-  const token = sessionStorage.getItem("accessToken") || sessionStorage.getItem("token");
-  const response = await fetch(finalUrl, {
-    credentials: "include",
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-  });
-  if (!response.ok) throw new Error(`Attachment download failed: ${response.status}`);
-  return response.blob();
-};
-
-const downloadBlob = (blob, name) => {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = name;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-};
-
-const PART_A_MAX = 150;
-const PART_B_MAX = 350;
-const PART_C_MAX = 150;
-const PART_D_MAX = 25;
-const PART_E_MAX = 50;
-const PART_D_RATING_OPTIONS = [
-  { value: "Outstanding", label: "Outstanding (Above 20)", score: 25 },
-  { value: "Above Average", label: "Above Average (16-20)", score: 20 },
-  { value: "Average", label: "Average (11-15)", score: 15 },
-  { value: "Below Average", label: "Below Average (6-10)", score: 10 },
-  { value: "Unacceptable", label: "Unacceptable (0-5)", score: 5 },
-];
-const partDRatingScore = (rating) => PART_D_RATING_OPTIONS.find((option) => option.value === rating)?.score ?? "";
-const blankLeaveManagementRow = () => ({
-  clTaken: "", mlTaken: "", odTaken: "", coffTaken: "",
-  clOutOf: "", mlOutOf: "", odOutOf: "", coffOutOf: "",
-  lateRemarks: "", workingDays: "", managementRating: "", score: "",
-});
-const A1_COURSE_DELIVERY_MAX = 40;
-const A2_COURSE_FILE_MAX = 20;
-const A3_INNOVATIVE_MAX = 20;
-const A3_INNOVATIVE_ROW_MAX = 4;
-const A3_METHODS_ROW_LIMIT = 5;
-const A4_FEEDBACK_MAX = 10;
-const A5_OBE_MAX = 20;
-const A6_PROJECT_GUIDANCE_MAX = 20;
-const A7_MENTORING_MAX = 10;
-const A8_QUALIFICATION_MAX = 10;
-const C1_UNIVERSITY_ADMIN_MAX = 50;
-const C2_SCHOOL_ADMIN_MAX = 30;
-const C3_EVENT_MAX = 20;
-const C4_OUTREACH_MAX = 10;
-const C5_INDUSTRY_MAX = 10;
-const C6_ALUMNI_MAX = 10;
-const C7_PLACEMENT_MAX = 20;
-const B1_JOURNAL_MAX = 100;
-const B2_BOOK_MAX = 30;
-const B3_ICT_MAX = 20;
-const B3_PATENT_MAX = 40;
-const B4_PROJECT_MAX = 40;
-const B5_RESEARCH_GUIDANCE_MAX = 20;
-const B6_CONSULTANCY_MAX = 20;
-const B7_CONFERENCE_MAX = 20;
-const B8_ATTENDED_MAX = 20;
-const B9_AWARDS_MAX = 20;
-const B10_STARTUP_MAX = 20;
-const b5RowMax = (row) => researchGuidanceRowMax(row) || B5_RESEARCH_GUIDANCE_MAX;
-const B5_FIELDS = ["degree", "name", "status", "date", "score"];
-const b5FieldsForRow = (row) => (row?.status === "Ongoing" ? B5_FIELDS.filter((key) => key !== "date") : B5_FIELDS);
-
-const defaultObeRows = () => [
-  { component: "CO-PO mapping sheet", evidence: "", score: "", max: 5 },
-  { component: "Attainment calculation", evidence: "", score: "", max: 10 },
-  { component: "Corrective action plan", evidence: "", score: "", max: 5 },
-];
-
-const defaultMentoringRows = () => [
-  { activity: "Mentoring meetings conducted (min. 2/semester)", evidence: "", score: "", max: 4 },
-  { activity: "Mentoring register maintained", evidence: "", score: "", max: 3 },
-  { activity: "Documented academic/career counselling outcomes", evidence: "", score: "", max: 3 },
-];
-
-const standardDummyPdfFor = (key) => [{
-  name: `${key}-dummy.pdf`,
-  type: "application/pdf",
-  size: 1024,
-  url: "data:application/pdf;base64,JVBERi0xLjQKJcTl8uXrp/Og0MTGCjEgMCBvYmoKPDwvVHlwZSAvQ2F0YWxvZy9QYWdlcyAyIDAgUj4+CmVuZG9iago=",
-}];
-
-const addStandardDummyDocs = (docs, prefix, count) => {
-  for (let index = 0; index < count; index += 1) {
-    docs[`${prefix}-${index}`] = standardDummyPdfFor(`${prefix}-${index}`);
-  }
-};
-
-const buildStandardDummyDocs = () => {
-  const docs = {};
-  [
-    ["lec", 4], ["courseFile", 2], ["innov", 5], ["obe", 3], ["proj", 2], ["mentor", 3], ["qual", 2],
-    ["uni", 2], ["dept", 2], ["event", 2], ["soc", 2], ["ind", 2], ["alumni", 2], ["placement", 2],
-    ["jour", 2], ["book", 2], ["ict", 2], ["res", 2], ["project2", 2], ["externalProject", 2],
-    ["pat", 2], ["awd", 2], ["conf", 2], ["prop", 2], ["prod", 2], ["fdp", 2], ["train", 2],
-  ].forEach(([prefix, count]) => addStandardDummyDocs(docs, prefix, count));
-  return docs;
-};
-
-const evidenceClaimedOrScored = (row = {}) =>
-  Boolean(String(row.score ?? "").trim()) || String(row.evidence ?? "").trim().toLowerCase() === "yes";
-
-function SubsectionIcon({ type }) {
-  const icons = {
-    teaching: ["M4 19V6.5A2.5 2.5 0 0 1 6.5 4H20v15H6.5A2.5 2.5 0 0 0 4 21V6.5", "M8 8h8M8 12h6"],
-    folder: ["M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"],
-    lightbulb: ["M9 18h6", "M10 22h4", "M8.5 14.5A6 6 0 1 1 15.5 14.5c-.9.7-1.5 1.7-1.5 2.5h-4c0-.8-.6-1.8-1.5-2.5Z"],
-    users: ["M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2", "M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z", "M22 21v-2a4 4 0 0 0-3-3.87", "M16 3.13a4 4 0 0 1 0 7.75"],
-    guidance: ["M12 3 4 7l8 4 8-4-8-4Z", "M4 11l8 4 8-4", "M7 13v4c2.2 2 7.8 2 10 0v-4"],
-    mentoring: ["M7 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z", "M17 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z", "M2 21a5 5 0 0 1 10 0", "M14 21a4 4 0 0 1 8 0"],
-    award: ["M12 15a6 6 0 1 0 0-12 6 6 0 0 0 0 12Z", "M9 14l-1 7 4-2 4 2-1-7"],
-    chart: ["M4 19V5", "M4 19h16", "M8 16v-5", "M12 16V8", "M16 16v-9"],
-    building: ["M4 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16", "M20 21v-9a2 2 0 0 0-2-2h-2", "M8 7h4M8 11h4M8 15h4"],
-    school: ["M3 21h18", "M5 21V8l7-5 7 5v13", "M9 21v-7h6v7", "M9 10h.01M15 10h.01"],
-    event: ["M7 2v4M17 2v4", "M3 8h18", "M5 4h14a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"],
-    outreach: ["M12 21s-7-4.4-9-9a5 5 0 0 1 9-4 5 5 0 0 1 9 4c-2 4.6-9 9-9 9Z"],
-    industry: ["M3 21h18", "M5 21V9l6 3V9l6 3v9", "M7 17h2M12 17h2M17 17h2"],
-    alumni: ["M12 3 22 8l-10 5L2 8l10-5Z", "M6 10v5c2 2 10 2 12 0v-5"],
-    placement: ["M10 6h4", "M6 21V8a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13", "M8 21h8", "M9 11h6M9 15h6"],
-    journal: ["M4 19.5V5a2 2 0 0 1 2-2h12v18H6a2 2 0 0 1-2-1.5Z", "M8 7h6M8 11h8M8 15h5"],
-    book: ["M4 19.5V5a2 2 0 0 1 2-2h11a3 3 0 0 1 3 3v15H6a2 2 0 0 1-2-1.5Z", "M8 7h7M8 11h7M8 15h5"],
-    monitor: ["M3 5h18v12H3V5Z", "M8 21h8", "M12 17v4"],
-    research: ["M10 10a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z", "M21 21l-6-6", "M14 14l1-1"],
-    project: ["M4 7h16", "M4 12h16", "M4 17h10", "M6 5v14"],
-    obe: ["M4 5h16v14H4V5Z", "M8 9h8", "M8 13h5", "M16 16l2 2 3-4"],
-    fundedProject: ["M4 7h16v12H4V7Z", "M8 7V5h8v2", "M8 13h8", "M8 16h5"],
-    externalProject: ["M5 12h14", "M13 6l6 6-6 6", "M5 5v14"],
-    patent: ["M12 2l7 4v6c0 5-3 8-7 10-4-2-7-5-7-10V6l7-4Z", "M9 12l2 2 4-5"],
-    trophy: ["M8 21h8", "M12 17v4", "M7 4h10v5a5 5 0 0 1-10 0V4Z", "M5 6H3a3 3 0 0 0 3 3h1", "M19 6h2a3 3 0 0 1-3 3h-1"],
-    conference: ["M4 5h16v10H4V5Z", "M8 21h8", "M12 15v6"],
-    consultancy: ["M8 6h13", "M8 12h13", "M8 18h13", "M3 6h.01M3 12h.01M3 18h.01"],
-    startup: ["M12 2c3 2 5 5 5 9 0 4-5 11-5 11S7 15 7 11c0-4 2-7 5-9Z", "M12 9h.01"],
-    training: ["M3 7h18", "M5 7v12h14V7", "M9 11h6M9 15h4"],
-    workshop: ["M4 4h16v6H4V4Z", "M6 14h12", "M8 18h8", "M10 10v4", "M14 10v4"],
-    industrialTraining: ["M3 21h18", "M4 21V10l5 3v-3l5 3v-3l6 4v7", "M7 17h2M12 17h2M17 17h2"],
-  };
-  const paths = icons[type] || icons.project;
+// Helper SVG Icon component
+function InlineSvgIcon({ paths, size = 16, color = "currentColor" }) {
   return (
-    <span className="appraisal-subsection-icon" aria-hidden="true">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        {paths.map((path) => <path key={path} d={path} />)}
-      </svg>
-    </span>
-  );
-}
-
-function SubsectionTitle({ icon, children }) {
-  const displayTitle = stripMaxMarksFromTitle(children);
-
-  return (
-    <div className="appraisal-subsection-title" style={{ display: "flex", alignItems: "center", gap: 8, color: "#4338ca", fontWeight: 800 }}>
-      <SubsectionIcon type={icon} />
-      <span>{displayTitle}</span>
-      <SectionInfoButton titleText={children} />
-    </div>
-  );
-}
-
-function InlineSvgIcon({ paths, size = 16, strokeWidth = 2.2 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      {paths.map((path) => <path key={path} d={path} />)}
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      {Array.isArray(paths) ? paths.map((p, i) => <path key={i} d={p} />) : <path d={paths} />}
     </svg>
   );
 }
 
+function SubsectionTitle({ children }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "18px 0 12px", fontSize: 15, fontWeight: 800, color: "#1e293b", borderBottom: "2px solid #e2e8f0", paddingBottom: 6 }}>
+      <span style={{ color: "#4f46e5", fontSize: 18 }}>•</span>
+      <span>{children}</span>
+    </div>
+  );
+}
+
+function SectionNavFooter({ prevSection, nextSection, onNavigate }) {
+  const labels = {
+    partA: "Part A — General Information",
+    sec1: "Section 1 — Teaching-Learning Process",
+    sec2: "Section 2 — Feedback from Students",
+    sec3: "Section 3 — Administrative Responsibilities",
+    sec4: "Section 4 — Evaluation & Assessment",
+    sec5: "Section 5 — Extension & Outreach",
+    sec6: "Section 6 — Domain Specific Activities",
+    sec7: "Section 7 — Student Mentoring",
+    sec8: "Section 8 — Collaborations",
+    sec9: "Section 9 — Research Activity",
+    sec10: "Section 10 — Personal Attributes",
+    summary: "Summary of Evaluation Marks",
+  };
+
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #e2e8f0", paddingTop: 16, marginTop: 24, gap: 12, flexWrap: "wrap" }}>
+      {prevSection ? (
+        <button
+          type="button"
+          onClick={() => onNavigate(prevSection)}
+          style={{ padding: "10px 18px", background: "#f1f5f9", color: "#334155", border: "1px solid #cbd5e1", borderRadius: 9, cursor: "pointer", fontWeight: 800, fontSize: 13, display: "inline-flex", alignItems: "center", gap: 6 }}
+        >
+          ← Previous: {labels[prevSection]}
+        </button>
+      ) : <div />}
+
+      {nextSection ? (
+        <button
+          type="button"
+          onClick={() => onNavigate(nextSection)}
+          style={{ padding: "10px 18px", background: "#4f46e5", color: "#fff", border: "none", borderRadius: 9, cursor: "pointer", fontWeight: 800, fontSize: 13, display: "inline-flex", alignItems: "center", gap: 6, boxShadow: "0 4px 14px rgba(79,70,229,0.28)" }}
+        >
+          Next: {labels[nextSection]} →
+        </button>
+      ) : <div />}
+    </div>
+  );
+}
+
 const SUMMARY_ICONS = {
-  book: ["M4 19.5V5a2 2 0 0 1 2-2h12v18H6a2 2 0 0 1-2-1.5Z", "M8 7h6M8 11h8M8 15h5"],
-  flask: ["M9 3h6", "M10 3v6l-4 8a3 3 0 0 0 2.7 4.3h6.6A3 3 0 0 0 18 17l-4-8V3", "M8 16h8"],
-  building: ["M4 21V7a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v14", "M20 21v-9a2 2 0 0 0-2-2h-2", "M8 9h4M8 13h4M8 17h4"],
-  document: ["M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z", "M14 2v6h6", "M8 13h8M8 17h6"],
-  sigma: ["M18 4H7l6 8-6 8h11"],
-  report: ["M6 2h9l5 5v15H6z", "M14 2v6h6", "M9 13h6M9 17h6"],
-  send: ["M22 2 11 13", "M22 2 15 22l-4-9-9-4 20-7Z"],
-  user: ["M20 21a8 8 0 0 0-16 0", "M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"],
+  user: "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2 M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+  document: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6",
 };
 
-function ScoreBadge({ score, max, color, tone = "#eef2ff" }) {
-  return (
-    <span style={{ display: "inline-flex", justifyContent: "center", minWidth: 92, borderRadius: 999, padding: "6px 12px", background: tone, color, fontSize: 13, fontWeight: 900, lineHeight: 1, whiteSpace: "nowrap" }}>
-      {score.toFixed(1)}/{max}
-    </span>
-  );
+// --- SCORING HELPER FUNCTIONS ---
+
+function calcWorkloadRowScore(planned, conducted) {
+  const p = Number(planned) || 0;
+  const c = Number(conducted) || 0;
+  if (p <= 0 || c < 0) return 0;
+  const pct = (c / p) * 100;
+  if (pct >= 85) return 20;
+  if (pct >= 75) return 15;
+  if (pct >= 60) return 12;
+  if (pct >= 50) return 10;
+  return 0;
 }
 
-function SummaryRow({ label, score, max, color, tone, iconTone, icon }) {
-  return (
-    <tr className="appraisal-summary-row">
-      <td style={{ padding: 0, border: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 14, minHeight: 52, padding: "10px 12px" }}>
-          <span style={{ width: 32, height: 32, borderRadius: 9, background: iconTone, color, border: `1px solid ${color}20`, display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-            <InlineSvgIcon paths={SUMMARY_ICONS[icon]} size={17} />
-          </span>
-          <span style={{ color: "#1f2937", fontSize: 13, fontWeight: 850, lineHeight: 1.35 }}>{label}</span>
-        </div>
-      </td>
-      <td style={{ width: 150, padding: "10px 12px", border: 0, textAlign: "right", verticalAlign: "middle" }}>
-        <ScoreBadge score={score} max={max} color={color} tone={tone} />
-      </td>
-    </tr>
-  );
+function calcFeedbackSemScore(rows) {
+  if (!rows || rows.length === 0) return 0;
+  const validPcts = rows.map((r) => Number(r.feedbackPct)).filter((v) => !isNaN(v) && v > 0);
+  if (validPcts.length === 0) return 0;
+  const avg = validPcts.reduce((a, b) => a + b, 0) / validPcts.length;
+  if (avg >= 85) return 5;
+  if (avg >= 75) return 4;
+  if (avg >= 70) return 3;
+  if (avg >= 65) return 2;
+  if (avg >= 60) return 1;
+  return 0;
 }
 
-const partEParameters = [
-  { parameter: "Self-motivation & Proactiveness", description: "List of activities/initiatives other than regular load/duties.", max: 10 },
-  { parameter: "Knowledge & Competence", description: "Domain/technical expertise relevant to role, Understanding of policies, procedures, and compliance requirements", max: 10 },
-  { parameter: "Target-based Work", description: "Tasks allotted; timely completion observed by authorities, Accuracy and thoroughness of output. Volume of work handled relative to role expectations, Adherence to deadlines and timelines", max: 10 },
-  { parameter: "Leadership & Supervisory Skills", description: "Team management and delegation, Mentoring/developing subordinates, Decision-making under ambiguity", max: 10 },
-  { parameter: "Adaptability & Learning", description: "Openness to change, new tools, or new processes, Response to feedback and coaching, Handling of unexpected/crisis situations", max: 10 },
+// Display-only average of the entered "Feedback" % values for a semester — used for
+// the "Average Feedback" column and does not feed into scoring.
+function averageFeedbackPct(rows) {
+  if (!rows || rows.length === 0) return "";
+  const validPcts = rows.map((r) => Number(r.feedbackPct)).filter((v) => !isNaN(v) && v > 0);
+  if (validPcts.length === 0) return "";
+  const avg = validPcts.reduce((a, b) => a + b, 0) / validPcts.length;
+  return `${avg.toFixed(1)}%`;
+}
+
+function calcResultAnalysisRowScore(passingPct, difficulty) {
+  const pct = Number(passingPct) || 0;
+  const diff = String(difficulty || "Easy").toLowerCase();
+  if (diff === "easy") {
+    if (pct >= 80) return 7;
+    if (pct >= 70) return 6;
+    if (pct >= 65) return 5;
+    if (pct >= 60) return 4;
+    if (pct >= 55) return 3;
+    return 0;
+  }
+  if (diff === "medium") {
+    if (pct >= 70) return 7;
+    if (pct >= 65) return 6;
+    if (pct >= 60) return 5;
+    if (pct >= 55) return 4;
+    if (pct >= 50) return 3;
+    return 0;
+  }
+  if (diff === "high" || diff === "difficult") {
+    if (pct >= 60) return 7;
+    if (pct >= 55) return 6;
+    if (pct >= 50) return 5;
+    if (pct >= 45) return 4;
+    if (pct >= 40) return 3;
+    return 0;
+  }
+  return 0;
+}
+
+const FIXED_EXAM_DUTIES = [
+  "Paper Setting",
+  "Paper Assessment",
+  "Supervision",
+  "Internal Examiner Duty",
+  "Flying Squad",
+  "CAP Director",
 ];
 
-function normalizeAcademicYearCycles(cyclesData) {
-  const normalizeAcademicYearLabel = (value) => {
-    const label = String(value || "").trim();
-    const shortMatch = label.match(/^(\d{2})-(\d{2})$/);
-    if (shortMatch) return `20${shortMatch[1]}-20${shortMatch[2]}`;
-    return label;
-  };
+const FIXED_OBE_ITEMS = [
+  "CO-PO-PSO Justification sheets for all courses available",
+  "Articulation Matrix of CO-PO-PSO Mapping is available",
+  "Course outcome attainment calculated for all courses",
+  "PSO & Program outcome attainment through CO calculated",
+  "Activity Plan to overcome the gaps",
+];
 
-  const normalizeCycle = (cycle) => {
-    if (!cycle) return null;
-    if (typeof cycle === "string") {
-      return { academic_year: cycle, is_open: cycle === APP_INFO.DEFAULT_AY };
-    }
-    const academicYear = normalizeAcademicYearLabel(cycle.academic_year || cycle.academicYear || cycle.year || cycle.year_label || "");
-    if (!academicYear) return null;
-    return {
-      academic_year: academicYear,
-      is_open: cycle.is_open ?? cycle.isOpen ?? cycle.active ?? cycle.open ?? (String(academicYear) === APP_INFO.DEFAULT_AY),
-    };
-  };
-
-  let list = [];
-  if (Array.isArray(cyclesData)) {
-    list = cyclesData.map(normalizeCycle).filter(Boolean);
-  } else if (Array.isArray(cyclesData?.cycles)) {
-    list = cyclesData.cycles.map(normalizeCycle).filter(Boolean);
-  } else if (Array.isArray(cyclesData?.data)) {
-    list = cyclesData.data.map(normalizeCycle).filter(Boolean);
-  }
-
-  if (list.length === 0) {
-    const openYear = APP_INFO.DEFAULT_AY || "2026-2027";
-    list.push({ academic_year: openYear, is_open: true });
-  }
-
-  return list
-    .reduce((acc, cycle) => {
-      if (!acc.some((existing) => existing.academic_year === cycle.academic_year)) {
-        acc.push(cycle);
-      }
-      return acc;
-    }, [])
-    .sort((a, b) => b.academic_year.localeCompare(a.academic_year));
-}
-
-const storedAcademicYearCycles = () =>
-  getSessionItem("availableCyclesSource") === "backend"
-    ? JSON.parse(getSessionItem("availableCycles") || "[]")
-    : [];
-
-const sessionFacultyInfo = (academicYear, defaultDesignation = "") => ({
-  name: sessionStorage.getItem("name") || "",
-  qual: sessionStorage.getItem("qualification") || "",
-  desig: sessionStorage.getItem("designation") || defaultDesignation || "",
-  school: sessionStorage.getItem("school") || sessionStorage.getItem("department") || "",
-  experience: sessionStorage.getItem("experience") || "",
-  ay: academicYear,
-});
-
-const profileSafeInfoForYear = (nextInfo = {}, academicYear, defaultDesignation = "") => {
-  const safeAcademicYear = academicYear || nextInfo.ay || APP_INFO.DEFAULT_AY;
-  if (isLegacyTwoPartAcademicYear(safeAcademicYear)) return { ...nextInfo, ay: safeAcademicYear };
-  return {
-    ...nextInfo,
-    ...sessionFacultyInfo(safeAcademicYear, defaultDesignation),
-    ay: safeAcademicYear,
-  };
-};
+const FIXED_PERSONAL_ATTRIBUTES = [
+  "Attitude towards work",
+  "Sense of responsibility",
+  "Overall behavior and personality",
+  "Emotional Stability",
+  "Communication Skills",
+  "Professional Skills",
+  "Moral courage and willingness",
+  "Leadership qualities",
+  "Capacity to work within timeframe",
+  "Decision making ability",
+];
 
 export default function StandardMyAppraisal({
   sectionTab,
   onSectionTabChange,
-  showSectionSelector = false,
+  showSectionSelector = true,
   defaultDesignation = sessionStorage.getItem("designation") || "",
   defaultAcademicYear = getActiveAcademicYear(),
   titleNameFallback = "Faculty",
   subtitleSeparator = ".",
 } = {}) {
   const navigate = useNavigate();
-  const loadRequestRef = useRef(0);
   const [localAppraisalTab, setLocalAppraisalTab] = useState("partA");
   const hodAppraisalTab = sectionTab || localAppraisalTab;
   const setHodAppraisalTab = onSectionTabChange || setLocalAppraisalTab;
   const resolvedAcademicYear = defaultAcademicYear || getActiveAcademicYear();
 
-  // -- HOD's own appraisal form state --
+  // Part A General Info
   const [info, setInfo] = useState({
-    ...sessionFacultyInfo(resolvedAcademicYear, defaultDesignation),
-    expDyp: "",
-    expPrev: "",
-    expTotal: "",
+    name: sessionStorage.getItem("full_name") || sessionStorage.getItem("username") || "",
+    department: sessionStorage.getItem("department") || "",
+    designation: defaultDesignation || sessionStorage.getItem("designation") || "",
+    highestQualification: sessionStorage.getItem("qualification") || "",
+    qualImprovement: "",
+    dob: "",
+    gender: "",
+    maritalStatus: "",
+    nationality: "Indian",
+    correspondenceAddress: "",
+    permanentAddress: "",
+    mobile: sessionStorage.getItem("phone") || "",
+    email: sessionStorage.getItem("email") || "",
+    ay: resolvedAcademicYear,
   });
 
-  useEffect(() => {
-    const syncAcademicYear = (event) => {
-      const nextAcademicYear = event?.detail?.academicYear || getActiveAcademicYear();
-      setInfo((previousInfo) => profileSafeInfoForYear(previousInfo, nextAcademicYear, defaultDesignation));
-    };
-
-    window.addEventListener("academicYearChanged", syncAcademicYear);
-    return () => window.removeEventListener("academicYearChanged", syncAcademicYear);
-  }, [defaultDesignation]);
-
-  useEffect(() => {
-    setInfo((previousInfo) => profileSafeInfoForYear(previousInfo, resolvedAcademicYear, defaultDesignation));
-  }, [resolvedAcademicYear, defaultDesignation]);
-
-  const [availableCyclesState, setAvailableCyclesState] = useState(() => normalizeAcademicYearCycles(storedAcademicYearCycles()));
-
-  useEffect(() => {
-    const syncAvailableCycles = () => {
-      setAvailableCyclesState(normalizeAcademicYearCycles(storedAcademicYearCycles()));
-    };
-    window.addEventListener("academicYearChanged", syncAvailableCycles);
-    return () => window.removeEventListener("academicYearChanged", syncAvailableCycles);
-  }, []);
-  const inf = (k) => (v) => setInfo((p) => ({ ...p, [k]: v }));
-
-  const [lectures, setLectures] = useState([
-    { sem: "", code: "", planned: "", conducted: "", score: "", hod: "", director: "" },
+  // --- SECTION 1 STATE ---
+  const [sem1Workload, setSem1Workload] = useState([
+    { class: "", subject: "", planned: "", conducted: "", score: "" },
   ]);
-  const setLec = (i, k, v) => setLectures((p) => p.map((r, j) => {
-    if (j !== i) return r;
-    const next = { ...r, [k]: v };
-    if (k === "planned" || k === "conducted") {
-      const planned = Number(next.planned);
-      const conducted = Number(next.conducted);
-      next.pctConducted = planned > 0 && conducted >= 0 ? `${((conducted / planned) * 100).toFixed(1)}%` : "";
-    }
-    if (k === "planned" || k === "conducted" || k === "pctConducted") next.score = String(lectureGuidelineScore(next));
-    return next;
-  }));
-
-  const [courseFile, setCourseFile] = useState([{ course: "", title: "", details: "", score: "", hod: "", director: "" }]);
-  const setCF = (i, k, v) => setCourseFile((p) => p.map((r, j) => {
-    if (j !== i) return r;
-    const next = { ...r, [k]: v };
-    return next;
-  }));
-  const [innovScore, setInnovScore] = useState("");
-  const [innovDetails, setInnovDetails] = useState("");
-  const [innovRows, setInnovRows] = useState([blankInnovativeRow()]);
-  const setInnov = (i, k, v) => setInnovRows((p) => p.map((r, j) => j === i ? { ...r, max: r.max || A3_INNOVATIVE_ROW_MAX, [k]: v } : r));
-  const [projects, setProjects] = useState([
-    { label: "", score: "", hod: "", director: "" },
+  const [sem2Workload, setSem2Workload] = useState([
+    { class: "", subject: "", planned: "", conducted: "", score: "" },
   ]);
-  const setProj = (i, k, v) => setProjects((p) => p.map((r, j) => {
-    if (j !== i) return r;
-    const next = { ...r, [k]: k === "score" ? String(clampScore(v, projectGuidanceRowMax(r)) || "") : v };
-    return k === "label" ? { ...next, score: String(clampScore(next.score, projectGuidanceRowMax(next)) || "") } : next;
-  }));
-
-  const [quals, setQuals] = useState([
-    { label: "", score: "", hod: "", director: "" },
+  const [eContentRows, setEContentRows] = useState([
+    { subject: "", topic: "", link: "", score: "" },
   ]);
-  const setQual = (i, k, v) => setQuals((p) => p.map((r, j) => j === i ? { ...r, [k]: k === "score" ? String(clampScore(v, A8_QUALIFICATION_MAX) || "") : v } : r));
-
-  const [feedback, setFeedback] = useState([
-    { code: "", fb1: "", fb2: "", score: "", hod: "", director: "" },
+  const [innovRows, setInnovRows] = useState([
+    { subject: "", innovation: "", description: "", score: "" },
   ]);
-  const setFb = (i, k, v) => setFeedback((p) => p.map((r, j) => {
-    if (j !== i) return r;
-    const next = { ...r, [k]: v };
-    if (k === "fb1" || k === "fb2") next.score = String(feedbackGuidelineScore(feedbackAverage(next)));
-    return next;
-  }));
 
-  const [obeRows, setObeRows] = useState(defaultObeRows);
-  const setObe = (i, k, v) => setObeRows((p) => p.map((r, j) => j === i ? { ...r, [k]: k === "score" ? String(clampScore(v, r.max || A5_OBE_MAX) || "") : v } : r));
+  // --- SECTION 2 STATE ---
+  const [sem1Feedback, setSem1Feedback] = useState([{ subject: "", feedbackPct: "" }]);
+  const [sem2Feedback, setSem2Feedback] = useState([{ subject: "", feedbackPct: "" }]);
+  const [sem1FeedbackSelfScore, setSem1FeedbackSelfScore] = useState("");
+  const [sem2FeedbackSelfScore, setSem2FeedbackSelfScore] = useState("");
 
-  const [mentoringRows, setMentoringRows] = useState(defaultMentoringRows);
-  const setMentoring = (i, k, v) => setMentoringRows((p) => p.map((r, j) => j === i ? { ...r, [k]: k === "score" ? String(clampScore(v, r.max || A7_MENTORING_MAX) || "") : v } : r));
-
-  const [deptActs, setDeptActs] = useState([
-    { activity: "", nature: "", period: "", score: "", hod: "", director: "" },
+  // --- SECTION 3 STATE ---
+  const [instAdmin, setInstAdmin] = useState([
+    { name: "", role: "Institute Level Coordinator/Head", score: "" },
   ]);
-  const setDept = (i, k, v) => setDeptActs((p) => p.map((r, j) => j === i ? { ...r, [k]: v } : r));
-
-  const [uniActs, setUniActs] = useState([
-    { activity: "", nature: "", period: "", score: "", hod: "", director: "" },
+  const [deptAdmin, setDeptAdmin] = useState([
+    { name: "", role: "Department Level Coordinator", score: "" },
   ]);
-  const setUni = (i, k, v) => setUniActs((p) => p.map((r, j) => j === i ? { ...r, [k]: v } : r));
 
-  const [eventRows, setEventRows] = useState([
-    { event: "", role: "", date: "", level: "", score: "" },
+  // --- SECTION 4 STATE ---
+  const [sem1Results, setSem1Results] = useState([
+    { subject: "", passingPct: "", prevYearResult: "", difficulty: "Easy", score: "" },
   ]);
-  const setEvent = (i, k, v) => setEventRows((p) => p.map((r, j) => j === i ? { ...r, [k]: v } : r));
-
-  const [society, setSociety] = useState([
-    { label: "", details: "", date: "", score: "", hod: "", director: "", max: C4_OUTREACH_MAX },
+  const [sem2Results, setSem2Results] = useState([
+    { subject: "", passingPct: "", prevYearResult: "", difficulty: "Easy", score: "" },
   ]);
-  const setSoc = (i, k, v) => setSociety((p) => p.map((r, j) => j === i ? { ...r, max: r.max || C4_OUTREACH_MAX, [k]: v } : r));
+  const [examDuties, setExamDuties] = useState(
+    FIXED_EXAM_DUTIES.map((duty) => ({ duty, details: "", score: "" }))
+  );
 
-  const [industry, setIndustry] = useState([
-    { activity: "", partner: "", date: "", name: "", details: "", score: "", hod: "", director: "" },
+  // --- SECTION 5 STATE ---
+  const [extensionActs, setExtensionActs] = useState([
+    { particular: "", hours: "", dateFrom: "", dateTo: "", score: "" },
   ]);
-  const setInd = (i, k, v) => setIndustry((p) => p.map((r, j) => j === i ? { ...r, [k]: v } : r));
 
-  const [alumniRows, setAlumniRows] = useState([
-    { activity: "", details: "", date: "", score: "" },
+  // --- SECTION 6 STATE ---
+  const [obeRows, setObeRows] = useState(
+    FIXED_OBE_ITEMS.map((item) => ({ particular: item, available: "No", score: "" }))
+  );
+  const [partEvents, setPartEvents] = useState([
+    { event: "", organizedBy: "", dateDuration: "", score: "" },
   ]);
-  const setAlumni = (i, k, v) => setAlumniRows((p) => p.map((r, j) => j === i ? { ...r, [k]: v } : r));
-
-  const [placementRows, setPlacementRows] = useState([
-    { activityType: "", name: "", date: "", score: "" },
+  const [condEvents, setCondEvents] = useState([
+    { event: "", date: "", duration: "", score: "" },
   ]);
-  const setPlacement = (i, k, v) => setPlacementRows((p) => p.map((r, j) => j === i ? { ...r, [k]: v } : r));
-
-  const [acr, setAcr] = useState(createAcrRows);
-  const setAcrRow = (i, k, v) => setAcr((p) => p.map((r, j) => j === i ? { ...r, [k]: v } : r));
-
-  const [journals, setJournals] = useState([
-    { title: "", journal: "", issn: "", index: "", score: "", hod: "", director: "" },
+  const [invitedTeachers, setInvitedTeachers] = useState([
+    { event: "", organizedBy: "", dateDuration: "", level: "University", score: "" },
   ]);
-  const setJour = (i, k, v) => setJournals((p) => p.map((r, j) => j === i ? { ...r, [k]: v } : r));
-
-  const [books, setBooks] = useState([
-    { title: "", book: "", issn: "", pub: "", coauth: "", first: "", score: "", hod: "", director: "" },
+  const [nptelCerts, setNptelCerts] = useState([
+    { subject: "", duration: "", dateCompletion: "", pctScore: "", score: "" },
   ]);
-  const setBook = (i, k, v) => setBooks((p) => p.map((r, j) => j === i ? { ...r, [k]: v } : r));
 
-  const [ict, setIct] = useState([
-    { title: "", desc: "", type: "", quad: "", score: "", hod: "", director: "" },
+  // --- SECTION 7 STATE ---
+  const [internships, setInternships] = useState([
+    { studentName: "", industryName: "", stipendDuration: "", progressReport: "No", score: "" },
   ]);
-  const setIctRow = (i, k, v) => setIct((p) => p.map((r, j) => j === i ? { ...r, [k]: v } : r));
-
-  const [research, setResearch] = useState([
-    { degree: "", name: "", thesis: "", score: "", hod: "", director: "" },
+  const [mentoringRows, setMentoringRows] = useState([
+    { classDiv: "", numStudents: "", freqMeetings: "", totalMeetings: "", score: "" },
   ]);
-  const setRes = (i, k, v) => setResearch((p) => p.map((r, j) => (j === i ? { ...r, [k]: v } : r)));
 
-  const [projects2, setProjects2] = useState([
-    { title: "", agency: "", date: "", amount: "", role: "", status: "", score: "", hod: "", max: B4_PROJECT_MAX },
+  // --- SECTION 8 STATE ---
+  const [collaborations, setCollaborations] = useState([
+    { particular: "", industryName: "", nature: "", score: "" },
   ]);
-  const setPrj2 = (i, k, v) => setProjects2((p) => p.map((r, j) => {
-    if (j !== i) return r;
-    const next = { ...r, max: r.max || B4_PROJECT_MAX, [k]: v };
-    if (k === "amount" || k === "status") next.score = String(externalProjectGuidelineScore(next));
-    return next;
-  }));
-
-  const [externalProjects, setExternalProjects] = useState([
-    { title: "", agency: "", date: "", amount: "", role: "", status: "", score: "", hod: "" },
+  const [sponsoredProjects, setSponsoredProjects] = useState([
+    { projectTitle: "", amount: "", sponsoringAgency: "", score: "" },
   ]);
-  const setExtPrj = (i, k, v) => setExternalProjects((p) => p.map((r, j) => j === i ? { ...r, [k]: v } : r));
 
-  const [patents, setPatents] = useState([
-    { title: "", type: "", date: "", status: "", fileNo: "", score: "", hod: "", director: "" },
+  // --- SECTION 9 STATE ---
+  const [researchGrants, setResearchGrants] = useState([
+    { title: "", fundingAgency: "", grantAmount: "", score: "" },
   ]);
-  const setPat = (i, k, v) => setPatents((p) => p.map((r, j) => j === i ? { ...r, [k]: v } : r));
-
-  const [awards, setAwards] = useState([
-    { title: "", date: "", agency: "", level: "", score: "", hod: "", director: "" },
+  const [ugcJournals, setUgcJournals] = useState([
+    { title: "", journal: "", publisher: "", issn: "", authorPosition: "1st Author", score: "" },
   ]);
-  const setAwd = (i, k, v) => setAwards((p) => p.map((r, j) => j === i ? { ...r, [k]: v } : r));
-
-  const [confs, setConfs] = useState([
-    { title: "", type: "", org: "", level: "", score: "", hod: "", director: "" },
+  const [indexedJournals, setIndexedJournals] = useState([
+    { title: "", journal: "", citationIndex: "", hIndex: "", authorPosition: "1st Author", score: "" },
   ]);
-  const setConf = (i, k, v) => setConfs((p) => p.map((r, j) => j === i ? { ...r, [k]: v } : r));
-
-  const [proposals, setProposals] = useState([
-    { title: "", duration: "", agency: "", amount: "", score: "", hod: "", director: "" },
+  const [conferences, setConferences] = useState([
+    { title: "", conference: "", proceedingsTitle: "", score: "" },
   ]);
-  const setProp = (i, k, v) => setProposals((p) => p.map((r, j) => {
-    if (j !== i) return r;
-    const next = { ...r, [k]: v };
-    if (k === "amount" || k === "revenue") next.score = String(consultancyGuidelineScore(next));
-    return next;
-  }));
-
-  const [products, setProducts] = useState([
-    { details: "", usage: "", score: "", hod: "", director: "" },
+  const [booksChapters, setBooksChapters] = useState([
+    { type: "Book", title: "", chapterName: "", publisher: "", score: "" },
   ]);
-  const setProd = (i, k, v) => setProducts((p) => p.map((r, j) => j === i ? { ...r, [k]: v } : r));
-
-  const [fdps, setFdps] = useState([
-    { program: "", fromDate: "", toDate: "", org: "", score: "", hod: "", director: "" },
+  const [reviewerEditorial, setReviewerEditorial] = useState([
+    { journalBook: "", level: "National", role: "Reviewer", score: "" },
   ]);
-  const setFdp = (i, k, v) => setFdps((p) => p.map((r, j) => j === i ? { ...r, [k]: v } : r));
-
-  const [training, setTraining] = useState([
-    { company: "", duration: "", nature: "", score: "", hod: "", director: "" },
+  const [patentsCopyrights, setPatentsCopyrights] = useState([
+    { title: "", type: "Copyright", appNo: "", status: "Filed", score: "" },
   ]);
-  const setTrain = (i, k, v) => setTraining((p) => p.map((r, j) => j === i ? { ...r, [k]: v } : r));
-
-  const [exhibitions, setExhibitions] = useState([
-    { title: "", type: "", venueLevel: "", date: "", score: "", hod: "", director: "" },
+  const [developmentActs, setDevelopmentActs] = useState([
+    { activity: "", fundingAmount: "", score: "" },
   ]);
-  const setExh = (i, k, v) => setExhibitions((p) => p.map((r, j) => j === i ? { ...r, [k]: v } : r));
+  const [consultancyRows, setConsultancyRows] = useState([
+    { area: "", fundsGenerated: "", score: "" },
+  ]);
+  const [awardsRows, setAwardsRows] = useState([
+    { particular: "", agency: "", score: "" },
+  ]);
+  const [otherAchievements, setOtherAchievements] = useState([
+    { achievement: "", level: "", score: "" },
+  ]);
 
-  const [leaveManagement, setLeaveManagement] = useState([blankLeaveManagementRow()]);
-  const setLeaveMgmt = (i, k, v) => setLeaveManagement((p) => p.map((r, j) => {
-    if (j !== i) return r;
-    const next = { ...r, [k]: v };
-    return k === "managementRating" ? { ...next, score: String(partDRatingScore(v)) } : next;
-  }));
+  // --- SECTION 10 STATE ---
+  const [personalAttributes, setPersonalAttributes] = useState(
+    FIXED_PERSONAL_ATTRIBUTES.map((attr) => ({ attribute: attr, score: "" }))
+  );
 
   const [docs, setDocs] = useState({});
-  const [appraisalLocked, setAppraisalLocked] = useState(false);
-  const [sectionSaveStatus, setSectionSaveStatus] = useState({ partA: false, partB: false, partC: false, partD: false, partE: false });
-  const [summaryOtherInfo, setSummaryOtherInfo] = useState("");
-  const [savingSection, setSavingSection] = useState(null);
-  const [workflowDeclaration, setWorkflowDeclaration] = useState(null);
-  const [workflowReviews, setWorkflowReviews] = useState([]);
-  const [legacyReportTotals, setLegacyReportTotals] = useState(null);
-  const [appraisalWindowStatus, setAppraisalWindowStatus] = useState(null);
-  const [appraisalWindowError, setAppraisalWindowError] = useState("");
-  const selectedCycle = availableCyclesState.find((cycle) => cycle.academic_year === info.ay);
-  const isSelectedCycleClosed = selectedCycle ? !selectedCycle.is_open : false;
-  const isSelectedCycleOpen = selectedCycle ? Boolean(selectedCycle.is_open) : false;
-  const isLegacyTwoPartYear = isLegacyTwoPartAcademicYear(info.ay);
-  const appraisalWindowLocked = !isLegacyTwoPartYear && !isSelectedCycleOpen && !canEditSelfAppraisal(appraisalWindowStatus, { declaration: workflowDeclaration });
-  const formLocked = appraisalLocked || appraisalWindowLocked;
-  const closedAppraisalCycleMessage = `Appraisal cycle for Academic Year ${info.ay} is closed. The next appraisal cycle form will be available soon. For any queries, please contact appraisal@dypiu.ac.in.`;
-  const appraisalWindowLockMessage = isSelectedCycleOpen || isSelectedCycleClosed ? "" : appraisalWindowError || (appraisalWindowLocked ? appraisalWindowMessage(appraisalWindowStatus, info.ay) : "");
-  const showClosedReportOnly = isSelectedCycleClosed && !isLegacyTwoPartYear;
-  const sectionOptions = isLegacyTwoPartYear
-    ? [
-        ["partA", "Part A"],
-        ["partB", "Part B"],
-      ]
-    : [
-        ["partA", "Part A"],
-        ["partB", "Part B"],
-        ["partC", "Part C"],
-        ["partD", "Part D"],
-        ["partE", "Part E"],
-        ["summary", "Summary"],
-      ];
 
-  const appraisalSetters = {
-    setInfo: (value) => setInfo((currentInfo) => {
-      const nextInfo = typeof value === "function" ? value(currentInfo) : value;
-      return profileSafeInfoForYear(nextInfo || {}, nextInfo?.ay || currentInfo.ay || info.ay, defaultDesignation);
-    }),
-    setLectures, setCourseFile, setInnovRows: (rows) => setInnovRows(sanitizeInnovativeRows(rows)), setInnovDetails, setInnovScore,
-    setProjects, setObeRows, setMentoringRows, setQuals, setFeedback, setDeptActs, setUniActs,
-    setEventRows, setSociety, setIndustry, setAlumniRows, setPlacementRows, setAcr, setJournals, setBooks, setIct,
-    setResearch, setProjects2, setExternalProjects, setPatents, setAwards,
-    setConfs, setProposals, setProducts, setFdps, setTraining, setExhibitions, setDocs,
-    setSummaryOtherInfo, setSectionSaveStatus, setLeaveManagement,
-  };
+  // --- SUMMARY: DECLARATION / SUBMIT / REPORT (UI-only — no backend wiring yet) ---
+  const [declarationChecked, setDeclarationChecked] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
 
-  const fillStandardDummyData = () => {
-    if (formLocked || submitting || showClosedReportOnly) return;
-    setLectures([
-      { sem: "2026-27 Sem-I", code: "CS101 - Programming Fundamentals", planned: "40", conducted: "39", pctConducted: "97.5%", score: "9", hod: "", director: "" },
-      { sem: "2026-27 Sem-I", code: "CS205 - Data Structures", planned: "42", conducted: "40", pctConducted: "95.2%", score: "9", hod: "", director: "" },
-      { sem: "2026-27 Sem-II", code: "CS302 - Database Systems", planned: "38", conducted: "36", pctConducted: "94.7%", score: "9", hod: "", director: "" },
-      { sem: "2026-27 Sem-II", code: "CS404 - Cloud Computing", planned: "36", conducted: "34", pctConducted: "94.4%", score: "9", hod: "", director: "" },
-    ]);
-    setCourseFile([
-      { course: "CS101 - Programming Fundamentals", title: "Course File Sem-I", details: "Yes", score: "4", hod: "", director: "" },
-      { course: "CS302 - Database Systems", title: "Course File Sem-II", details: "Yes", score: "4", hod: "", director: "" },
-    ]);
-    setInnovRows([
-      { method: "Blended learning", details: "Yes", score: "4", max: A3_INNOVATIVE_ROW_MAX },
-      { method: "Virtual Lab", details: "Yes", score: "4", max: A3_INNOVATIVE_ROW_MAX },
-      { method: "Project-Based Learning", details: "Yes", score: "4", max: A3_INNOVATIVE_ROW_MAX },
-      { method: "Quiz", details: "Yes", score: "4", max: A3_INNOVATIVE_ROW_MAX },
-      { method: "Flip classroom (with proof of material shared)", details: "Yes", score: "4", max: A3_INNOVATIVE_ROW_MAX },
-    ]);
-    setInnovDetails("Blended learning, virtual lab, project-based learning, quiz and flipped classroom used.");
-    setInnovScore("20");
-    setObeRows(defaultObeRows().map((row) => ({ ...row, evidence: "Yes", score: String(row.max) })));
-    setMentoringRows(defaultMentoringRows().map((row) => ({ ...row, evidence: "Yes", score: String(row.max) })));
-    setProjects([
-      { label: "B.Tech / UG Major Project", score: "5", hod: "", director: "" },
-      { label: "Mini Project / Internship", score: "5", hod: "", director: "" },
-    ]);
-    setQuals([
-      { label: "PhD / Higher qualification progress", title: "NPTEL Certification", body: "NPTEL", date: "01/08/2026", score: "5", hod: "", director: "" },
-      { label: "Certification / FDP qualification enhancement", title: "Cloud Certification", body: "AWS Academy", date: "02/08/2026", score: "5", hod: "", director: "" },
-    ]);
-    setFeedback([
-      { code: "CS101 - Programming Fundamentals", fb1: "88", fb2: "90", score: "5", hod: "", director: "" },
-      { code: "CS302 - Database Systems", fb1: "86", fb2: "89", score: "5", hod: "", director: "" },
-    ]);
-    setUniActs([
-      { activity: "University examination committee", nature: "Coordinator", period: "Aug 2026 - Dec 2026", score: "20", hod: "", director: "" },
-      { activity: "Academic council support", nature: "Member", period: "Jan 2027 - Apr 2027", score: "20", hod: "", director: "" },
-    ]);
-    setDeptActs([
-      { activity: "Department timetable coordination", nature: "Coordinator", period: "Aug 2026 - Dec 2026", score: "10", hod: "", director: "" },
-      { activity: "Lab development activity", nature: "Member", period: "Jan 2027 - Apr 2027", score: "10", hod: "", director: "" },
-    ]);
-    setEventRows([
-      { event: "Technical workshop", role: "Coordinator", date: "03/08/2026", level: "University", score: "10" },
-      { event: "Hackathon mentoring", role: "Mentor", date: "04/08/2026", level: "National", score: "10" },
-    ]);
-    setSociety([
-      { label: "NSS / outreach activity", details: "Community coding awareness session", date: "05/08/2026", score: "5", hod: "", director: "", max: C4_OUTREACH_MAX },
-      { label: "Extension activity", details: "Digital literacy camp", date: "06/08/2026", score: "5", hod: "", director: "", max: C4_OUTREACH_MAX },
-    ]);
-    setIndustry([
-      { activity: "Industry expert session", partner: "Tech Partner Pvt Ltd", date: "07/08/2026", name: "Tech Partner Pvt Ltd", details: "Session conducted", score: "2", hod: "", director: "" },
-      { activity: "MoU discussion", partner: "Innovation Labs", date: "08/08/2026", name: "Innovation Labs", details: "Collaboration meeting", score: "2", hod: "", director: "" },
-    ]);
-    setAlumniRows([
-      { activity: "Alumni talk", details: "Career guidance by alumnus", date: "09/08/2026", score: "5" },
-      { activity: "Alumni mentoring", details: "Project mentoring session", date: "10/08/2026", score: "5" },
-    ]);
-    setPlacementRows([
-      { activityType: "Resume review", name: "Student Batch A", date: "11/08/2026", score: "10" },
-      { activityType: "Mock interview", name: "Student Batch B", date: "12/08/2026", score: "10" },
-    ]);
-    setJournals([
-      { title: "AI Enabled Learning Analytics", journal: "International Journal of Computing", issn: "2456-0001", index: "Scopus", impactFactor: "2.1", authorPosition: "First Author", score: "30", hod: "", director: "" },
-      { title: "Secure IoT Framework", journal: "Journal of Engineering Systems", issn: "2456-0002", index: "Web of Science", impactFactor: "1.8", authorPosition: "Co-author", score: "30", hod: "", director: "" },
-    ]);
-    setBooks([
-      { title: "Applied Data Science Chapter", book: "DYPIU Press, ISBN 9780000000001", issn: "9780000000001", pub: "Chapter", level: "National", coauth: "No", first: "Yes", score: "10", hod: "", director: "" },
-      { title: "Cloud Computing Practices", book: "Tech Press, ISBN 9780000000002", issn: "9780000000002", pub: "Book", level: "National", coauth: "Yes", first: "No", score: "10", hod: "", director: "" },
-    ]);
-    setIct([
-      { title: "LMS module on DBMS", desc: "Recorded module", type: "Video", quad: "Q1", score: "5", hod: "", director: "" },
-      { title: "MOOC content unit", desc: "E-content uploaded", type: "MOOC", quad: "Q2", score: "5", hod: "", director: "" },
-    ]);
-    setResearch([
-      { degree: "PhD", name: "Research Scholar A", thesis: "AI in Education", status: "Ongoing", date: "13/08/2026", score: "5", hod: "", director: "" },
-      { degree: "PG", name: "PG Student B", thesis: "Cloud Security", status: "Completed", date: "14/08/2026", score: "5", hod: "", director: "" },
-    ]);
-    setProjects2([
-      { title: "Smart Campus Analytics", agency: "AICTE", date: "15/08/2026", amount: "100000", role: "PI", status: "Ongoing", score: "10", hod: "", max: B4_PROJECT_MAX },
-      { title: "IoT Lab Prototype", agency: "DYPIU", date: "16/08/2026", amount: "75000", role: "Co-PI", status: "Completed", score: "10", hod: "", max: B4_PROJECT_MAX },
-    ]);
-    setExternalProjects([
-      { title: "Industry Consultancy Proof", agency: "Tech Partner Pvt Ltd", date: "17/08/2026", amount: "50000", role: "PI", status: "Completed", score: "5", hod: "" },
-      { title: "Testing Project", agency: "Innovation Labs", date: "18/08/2026", amount: "35000", role: "Co-PI", status: "Ongoing", score: "5", hod: "" },
-    ]);
-    setPatents([
-      { title: "Smart Attendance Device", type: "National", date: "19/08/2026", status: "Published", fileNo: "PAT-001", score: "10", hod: "", director: "" },
-      { title: "Learning Analytics Method", type: "National", date: "20/08/2026", status: "Filed", fileNo: "PAT-002", score: "10", hod: "", director: "" },
-    ]);
-    setAwards([
-      { title: "Best Paper Award", date: "21/08/2026", agency: "IEEE Chapter", level: "National", score: "5", hod: "", director: "" },
-      { title: "Reviewer Recognition", date: "22/08/2026", agency: "Journal Board", level: "International", score: "5", hod: "", director: "" },
-    ]);
-    setConfs([
-      { title: "AI Workshop", type: "Workshop", role: "Coordinator", date: "23/08/2026", org: "DYPIU", level: "National", score: "5", hod: "", director: "" },
-      { title: "Cybersecurity Seminar", type: "Seminar", role: "Speaker", date: "24/08/2026", org: "DYPIU", level: "University", score: "5", hod: "", director: "" },
-    ]);
-    setProposals([
-      { title: "Consultancy Proposal", duration: "2 weeks", agency: "Tech Partner Pvt Ltd", amount: "50000", score: "5", hod: "", director: "" },
-      { title: "Testing Proposal", duration: "1 month", agency: "Innovation Labs", amount: "75000", score: "5", hod: "", director: "" },
-    ]);
-    setProducts([
-      { details: "Prototype for lab automation", role: "Lead", usage: "Used in lab demo", status: "Completed", score: "5", hod: "", director: "" },
-      { details: "Startup mentoring contribution", role: "Mentor", usage: "Student startup support", status: "Ongoing", score: "5", hod: "", director: "" },
-    ]);
-    setFdps([
-      { program: "Advanced Pedagogy FDP", fromDate: "01/06/2026", toDate: "05/06/2026", org: "NITTTR", score: "5", hod: "", director: "" },
-      { program: "AI Tools FDP", fromDate: "10/07/2026", toDate: "16/07/2026", org: "AICTE", score: "5", hod: "", director: "" },
-    ]);
-    setTraining([
-      { company: "Tech Partner Pvt Ltd", duration: "1 week", nature: "Industrial training", score: "5", hod: "", director: "" },
-      { company: "Cloud Academy", duration: "5 days", nature: "Hands-on training", score: "5", hod: "", director: "" },
-    ]);
-    setExhibitions([
-      { title: "Engineering Project Expo", type: "Group", venueLevel: "University", date: "25/08/2026", score: "5", hod: "", director: "" },
-      { title: "Innovation Showcase", type: "Curated", venueLevel: "National", date: "26/08/2026", score: "5", hod: "", director: "" },
-    ]);
-    setDocs((prev) => ({ ...prev, ...buildStandardDummyDocs() }));
-    setSummaryOtherInfo("Dummy Engineering appraisal data generated for multi-row validation, attachment, report, save, and review testing.");
-  };
+  // --- SCORE CALCULATIONS ---
 
-  useEffect(() => {
-    let active = true;
-    setAppraisalWindowStatus(null);
-    setAppraisalWindowError("");
-    if (!info.ay) {
-      setAppraisalWindowError("Please select an academic year.");
-      return undefined;
-    }
-    if (isLegacyTwoPartYear) {
-      setAppraisalWindowStatus({ academic_year: info.ay, is_open: true, status: "open" });
-      return undefined;
-    }
-    getAppraisalWindowStatus({ academicYear: info.ay })
-      .then((status) => {
-        if (!active) return;
-        setAppraisalWindowStatus(status);
-      })
-      .catch((err) => {
-        if (!active) return;
-        setAppraisalWindowError(appraisalWindowErrorMessage(err));
-      });
-    return () => {
-      active = false;
-    };
-  }, [info.ay, isLegacyTwoPartYear]);
+  // Sec 1
+  const sem1WorkloadScores = sem1Workload.map((r) => Number(r.score) || 0);
+  const sem1WorkloadMax = sem1WorkloadScores.length > 0 ? Math.max(...sem1WorkloadScores, 0) : 0;
+  const sem1WorkloadScore = Math.min(20, sem1WorkloadMax);
 
-  useEffect(() => {
-    const userEmail = sessionStorage.getItem("username") || sessionStorage.getItem("email");
-    if (!userEmail || !info.ay) return;
-    const requestId = loadRequestRef.current + 1;
-    loadRequestRef.current = requestId;
-    let cancelled = false;
-    const requestedAcademicYear = info.ay;
-    const isCurrentLoad = () => !cancelled && loadRequestRef.current === requestId;
-    const scopedAppraisalSetters = Object.fromEntries(
-      Object.entries(appraisalSetters).map(([key, setter]) => [
-        key,
-        (...args) => {
-          if (!isCurrentLoad()) return undefined;
-          return setter?.(...args);
-        },
-      ])
-    );
-    setDocs({});
-    setLegacyReportTotals(null);
+  const sem2WorkloadScores = sem2Workload.map((r) => Number(r.score) || 0);
+  const sem2WorkloadMax = sem2WorkloadScores.length > 0 ? Math.max(...sem2WorkloadScores, 0) : 0;
+  const sem2WorkloadScore = Math.min(20, sem2WorkloadMax);
 
-    const loadOwnAppraisal = async () => {
-      try {
-        const data = await api.get("/appraisal/status", { params: { academic_year: requestedAcademicYear } }).catch((err) => {
-          console.error("Could not load workflow status:", err);
-          return null;
-        });
-        if (!isCurrentLoad()) return;
-        const declaration = data?.declaration || null;
-        setWorkflowDeclaration(declaration);
-        const loadedReviews = reviewListFrom(data?.reviews);
-        setWorkflowReviews(loadedReviews);
-        const submittedAlready = Boolean(declaration) && !hasActiveRejection(declaration, loadedReviews);
-        setAppraisalLocked(isSelectedCycleClosed || submittedAlready);
+  const eContentScore = Math.min(6, eContentRows.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const innovScore = Math.min(4, innovRows.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const sec1Total = Math.min(50, sem1WorkloadScore + sem2WorkloadScore + eContentScore + innovScore);
 
-        const savedAppraisal = await (isSelectedCycleClosed ? loadClosedAppraisal : loadSavedAppraisal)({
-          facultyEmail: userEmail,
-          academicYear: requestedAcademicYear,
-          setters: scopedAppraisalSetters,
-          // A legacy (previous-year) academic year is always a past, already-submitted
-          // cycle, never the one being actively drafted - so it must be read from the
-          // definitive submitted record for that exact email + academic year, not the
-          // generic draft snapshot (which reflects whatever is currently being typed for
-          // the active cycle and isn't reliably scoped by year).
-          preferSubmitted: isLegacyTwoPartAcademicYear(requestedAcademicYear) || (Boolean(declaration) && hasActiveRejection(declaration, loadedReviews)),
-        });
-        if (!isCurrentLoad()) return;
-        setLegacyReportTotals(isLegacyTwoPartAcademicYear(requestedAcademicYear)
-          ? legacySubmittedTotals(
-              savedAppraisal,
-              savedAppraisal?.totals,
-              savedAppraisal?.payload,
-              savedAppraisal?.payload?.totals,
-              savedAppraisal?.form,
-              savedAppraisal?.payload?.form,
-              savedAppraisal?.declaration,
-              savedAppraisal?.payload?.declaration,
-            )
-          : null);
-        const savedDeclaration = savedAppraisal?.declaration || savedAppraisal?.payload?.declaration || null;
-        if (savedDeclaration && !declaration) setWorkflowDeclaration(savedDeclaration);
-        const savedReviews = reviewListFrom(savedAppraisal?.reviews || savedAppraisal?.payload?.reviews);
-        if (savedReviews.length && !loadedReviews.length) setWorkflowReviews(savedReviews);
+  // Sec 2
+  const sem1FeedbackScore = Math.min(5, Number(sem1FeedbackSelfScore) || 0);
+  const sem2FeedbackScore = Math.min(5, Number(sem2FeedbackSelfScore) || 0);
+  const sec2Total = Math.min(10, sem1FeedbackScore + sem2FeedbackScore);
+  const sem1AvgFeedback = averageFeedbackPct(sem1Feedback);
+  const sem2AvgFeedback = averageFeedbackPct(sem2Feedback);
 
-        await Promise.all([
-          loadAppraisalDocuments({
-            facultyEmail: userEmail,
-            academicYear: requestedAcademicYear,
-            setDocs: (nextDocs) => {
-              if (isCurrentLoad()) setDocs(nextDocs);
-            },
-          }),
-        ]);
-      } catch (err) {
-        console.error("Could not load saved appraisal:", err);
-      }
-    };
+  // Sec 3
+  const instAdminScore = Math.min(10, instAdmin.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const deptAdminScore = Math.min(10, deptAdmin.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const sec3Total = Math.min(20, instAdminScore + deptAdminScore);
 
-    loadOwnAppraisal();
-    return () => {
-      cancelled = true;
-    };
-  }, [info.ay, isSelectedCycleClosed]);
+  // Sec 4
+  const sem1ResScores = sem1Results.map((r) => Number(r.score) || 0);
+  const sem1ResultScore = Math.min(7, sem1ResScores.length > 0 ? Math.max(...sem1ResScores, 0) : 0);
 
-  useEffect(() => {
-    if (isLegacyTwoPartYear && !["partA", "partB"].includes(hodAppraisalTab)) {
-      setHodAppraisalTab("partA");
-    }
-  }, [isLegacyTwoPartYear, hodAppraisalTab]);
+  const sem2ResScores = sem2Results.map((r) => Number(r.score) || 0);
+  const sem2ResultScore = Math.min(7, sem2ResScores.length > 0 ? Math.max(...sem2ResScores, 0) : 0);
 
-  // -- Computed scores for HOD appraisal --
-  const totalLecScore = sumSectionScore(lectures, A1_COURSE_DELIVERY_MAX, "score", 10);
-  const courseFileScore = sumSectionScore(courseFile, A2_COURSE_FILE_MAX, "score", SCORE_LIMITS.courseFileRow);
-  const innovTotal = clampScore(innovRows.reduce((s, r) => s + clampScore(r.score, A3_INNOVATIVE_ROW_MAX), 0), A3_INNOVATIVE_MAX);
-  const selectedInnovativeMethods = new Set(innovRows.map((row) => String(row.method ?? "").trim()).filter(Boolean));
-  const innovativeMethodOptionsForRow = (currentMethod) => INNOVATIVE_METHOD_OPTIONS.filter((option) => option.value === currentMethod || !selectedInnovativeMethods.has(option.value));
-  const innovScoreComputed = String(innovTotal);
-  const projectTotal = sumSectionScore(projects, A6_PROJECT_GUIDANCE_MAX, "score", A6_PROJECT_GUIDANCE_MAX);
-  const obeScore = sumSectionScore(obeRows, A5_OBE_MAX);
-  const mentoringScore = sumSectionScore(mentoringRows, A7_MENTORING_MAX);
-  const qualTotal = sumSectionScore(quals, A8_QUALIFICATION_MAX, "score", SCORE_LIMITS.qualificationRow);
-  const teachingRaw = totalLecScore + courseFileScore + innovTotal + projectTotal + obeScore + mentoringScore + qualTotal;
-  const stuFeedbackScore = feedbackSectionScore(feedback, A4_FEEDBACK_MAX);
-  const deptScore = sumSectionScore(deptActs, C2_SCHOOL_ADMIN_MAX);
-  const uniScore = sumSectionScore(uniActs, C1_UNIVERSITY_ADMIN_MAX);
-  const eventScore = sumSectionScore(eventRows, C3_EVENT_MAX);
-  const societyScore = sumSectionScore(society, C4_OUTREACH_MAX);
-  const industryScore = sumSectionScore(industry, C5_INDUSTRY_MAX);
-  const alumniScore = sumSectionScore(alumniRows, C6_ALUMNI_MAX);
-  const placementScore = sumSectionScore(placementRows, C7_PLACEMENT_MAX);
-  const acrScore = 0;
-  const teachingMax = PART_A_MAX;
-  const effectivePartAMax = PART_A_MAX;
-  const partATotal = clampScore(teachingRaw + stuFeedbackScore, effectivePartAMax);
+  const examDutiesScore = Math.min(6, examDuties.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const sec4Total = Math.min(20, sem1ResultScore + sem2ResultScore + examDutiesScore);
 
-  const journalScore = sumSectionScore(journals, B1_JOURNAL_MAX);
-  const bookScore = sumSectionScore(books, B2_BOOK_MAX);
-  const ictScore = sumSectionScore(ict, B3_ICT_MAX);
-  const researchScore = clampScore(research.reduce((total, row) => total + researchGuidanceScore(row), 0), B5_RESEARCH_GUIDANCE_MAX);
-  const projectBScore = sumSectionScore(projects2, B4_PROJECT_MAX);
-  const externalProjectScore = 0;
-  const patentScore = sumSectionScore(patents, B3_PATENT_MAX);
-  const awardScore = sumSectionScore(awards, B9_AWARDS_MAX);
-  const confScore = sumSectionScore(confs, B7_CONFERENCE_MAX);
-  const proposalScore = sumSectionScore(proposals, B6_CONSULTANCY_MAX);
-  const productScore = sumSectionScore(products, B10_STARTUP_MAX);
-  const fdpScore = fdps.reduce((s, r) => s + clampScore(parseFloat(r.score) || 0, B8_ATTENDED_MAX), 0);
-  const trainScore = training.reduce((s, r) => s + clampScore(parseFloat(r.score) || 0, B8_ATTENDED_MAX), 0);
-  const b8Score = clampScore(fdpScore + trainScore, B8_ATTENDED_MAX);
-  const researchGuidanceProjectMax = B4_PROJECT_MAX + B5_RESEARCH_GUIDANCE_MAX;
-  const effectivePartBMax = PART_B_MAX;
-  const partCTotal = clampScore(uniScore + deptScore + eventScore + societyScore + industryScore + alumniScore + placementScore, PART_C_MAX);
-  const partDTotal = sumSectionScore(leaveManagement, PART_D_MAX, "score", PART_D_MAX);
-  const effectiveGrandMax = effectivePartAMax + effectivePartBMax + PART_C_MAX + PART_D_MAX;
-  const partBTotal = clampScore(journalScore + bookScore + ictScore + researchScore + projectBScore + patentScore + awardScore + confScore + proposalScore + productScore + b8Score, effectivePartBMax);
-  const grandTotal = clampScore(partATotal + partBTotal + partCTotal + partDTotal, effectiveGrandMax);
+  // Sec 5
+  const sec5Total = Math.min(10, extensionActs.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
 
-  const partAMarksPercentage = effectivePartAMax > 0 ? ((partATotal / effectivePartAMax) * 100).toFixed(2) : "0.00";
-  const partBMarksPercentage = effectivePartBMax > 0 ? ((partBTotal / effectivePartBMax) * 100).toFixed(2) : "0.00";
-  const totalMarksPercentage = effectiveGrandMax > 0 ? ((grandTotal / effectiveGrandMax) * 100).toFixed(2) : "0.00";
+  // Sec 6
+  const obeScore = Math.min(20, obeRows.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const partEventsScore = Math.min(15, partEvents.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const condEventsScore = Math.min(10, condEvents.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const invitedScore = Math.min(5, invitedTeachers.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const nptelScore = Math.min(10, nptelCerts.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const sec6Total = Math.min(60, obeScore + partEventsScore + condEventsScore + invitedScore + nptelScore);
 
-  const gradeFunc = () => {
-    const p = pct(grandTotal, effectiveGrandMax);
-    if (p >= 85) return { label: "Outstanding", color: "#10b981" };
-    if (p >= 70) return { label: "Very Good", color: "#3b82f6" };
-    if (p >= 55) return { label: "Good", color: "#f59e0b" };
-    if (p >= 40) return { label: "Satisfactory", color: "#f97316" };
-    return { label: "Needs Improvement", color: "#ef4444" };
-  };
-  const g = gradeFunc();
-  const overallProgress = pct(grandTotal, effectiveGrandMax);
-  const partWiseProgressRows = [
-    ["Part A", partATotal, effectivePartAMax],
-    ["Part B", partBTotal, effectivePartBMax],
-    ["Part C", partCTotal, PART_C_MAX],
-    ["Part D", partDTotal, PART_D_MAX],
+  // Sec 7
+  const internshipScore = Math.min(10, internships.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const mentoringScore = Math.min(10, mentoringRows.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const sec7Total = Math.min(20, internshipScore + mentoringScore);
+
+  // Sec 8
+  const collabScore = Math.min(10, collaborations.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const sponsoredScore = Math.min(10, sponsoredProjects.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const sec8Total = Math.min(20, collabScore + sponsoredScore);
+
+  // Sec 9
+  const grantsScore = Math.min(10, researchGrants.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const ugcScore = Math.min(10, ugcJournals.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const indexedScore = Math.min(10, indexedJournals.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const confsScore = Math.min(5, conferences.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const booksScore = Math.min(5, booksChapters.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const reviewerScore = Math.min(5, reviewerEditorial.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const patentsScore = Math.min(10, patentsCopyrights.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const devScore = Math.min(5, developmentActs.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const consultScore = Math.min(5, consultancyRows.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const awdScore = Math.min(5, awardsRows.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const othScore = Math.min(10, otherAchievements.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const sec9Total = Math.min(80, grantsScore + ugcScore + indexedScore + confsScore + booksScore + reviewerScore + patentsScore + devScore + consultScore + awdScore + othScore);
+
+  // Sec 10
+  const sec10Total = Math.min(10, personalAttributes.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+
+  // Grand Total out of 300
+  const grandTotal = sec1Total + sec2Total + sec3Total + sec4Total + sec5Total + sec6Total + sec7Total + sec8Total + sec9Total + sec10Total;
+
+  // Section options array
+  const sectionOptions = [
+    ["partA", "Part A — General Information"],
+    ["sec1", "Section 1 — Teaching-Learning Process"],
+    ["sec2", "Section 2 — Feedback from Students"],
+    ["sec3", "Section 3 — Administrative Responsibilities"],
+    ["sec4", "Section 4 — Evaluation & Assessment"],
+    ["sec5", "Section 5 — Extension & Outreach"],
+    ["sec6", "Section 6 — Domain Specific Activities"],
+    ["sec7", "Section 7 — Student Mentoring"],
+    ["sec8", "Section 8 — Collaborations"],
+    ["sec9", "Section 9 — Research Activity"],
+    ["sec10", "Section 10 — Personal Attributes"],
+    ["summary", "Summary of Evaluation Marks"],
   ];
-  const [submitting, setSubmitting] = useState(false);
-  const [declarationConfirmed, setDeclarationConfirmed] = useState(false);
-  const [attachmentsConfirmed, setAttachmentsConfirmed] = useState(false);
-  const [attachmentDownloading, setAttachmentDownloading] = useState(false);
-
-  const validateSelfAppraisalRows = () => {
-    const sections = [
-      { label: "A(i). Lectures", rows: lectures, fields: ["sem", "code", "planned", "conducted", "score"] },
-      { label: "A(ii). Course File", rows: courseFile, fields: ["course", "title", "details", "score"] },
-      { label: "A(iii). Innovative Teaching Methods", rows: innovRows, fields: ["method", "details", "score"], fieldsForRow: (row) => row?.method === OTHER_INNOVATIVE_METHOD ? ["method", "methodOther", "details", "score"] : ["method", "details", "score"] },
-      { label: "A5. Learning Outcomes Attainment & OBE Practice", rows: obeRows, fields: ["component", "score"], isRowActive: evidenceClaimedOrScored },
-      { label: "A6. Student Project Guidance", rows: projects, fields: ["label", "score"], rowMax: A6_PROJECT_GUIDANCE_MAX, maxScore: A6_PROJECT_GUIDANCE_MAX },
-      { label: "A7. Student Mentoring & Counselling", rows: mentoringRows, fields: ["activity", "score"], isRowActive: evidenceClaimedOrScored },
-      { label: "A8. Professional Development & Qualification Enhancement", rows: quals, fields: ["label", "score"] },
-      { label: "A(vi). Student Feedback", rows: feedback, fields: ["code", "fb1", "fb2"] },
-      { label: "C1. Administration at University Level", rows: uniActs, fields: ["activity", "nature", "period", "score"] },
-      { label: "C2. Administration at School Level", rows: deptActs, fields: ["activity", "nature", "period", "score"] },
-      { label: "C3. Event Organisation & Institutional Visibility", rows: eventRows, fields: ["event", "role", "date", "level", "score"] },
-      { label: "C4. Outreach, Extension & Social Responsibility", rows: society, fields: ["label", "details", "date", "score"], rowMax: C4_OUTREACH_MAX, maxScore: C4_OUTREACH_MAX },
-      { label: "C5. Industry Interaction & Linkages", rows: industry, fields: ["activity", "partner", "date", "score"], rowMax: C5_INDUSTRY_MAX, maxScore: C5_INDUSTRY_MAX },
-      { label: "C6. Alumni Engagement & Networking", rows: alumniRows, fields: ["activity", "details", "date", "score"] },
-      { label: "C7. Student Placement Mentoring & Career Development", rows: placementRows, fields: ["activityType", "name", "date", "score"] },
-      { label: "B1. Journals", rows: journals, fields: ["title", "journal", "score"], rowMax: B1_JOURNAL_MAX, maxScore: B1_JOURNAL_MAX },
-      { label: "B2. Books / Chapters", rows: books, fields: ["title", "book", "pub", "score"], rowMax: B2_BOOK_MAX, maxScore: B2_BOOK_MAX },
-      { label: "B3. Patents, Copyrights & IP and Product Development", rows: patents, fields: ["title", "type", "status", "fileNo", "score"], rowMax: B3_PATENT_MAX, maxScore: B3_PATENT_MAX },
-      { label: "B4. External Funded Research Projects", rows: projects2, fields: ["title", "agency", "date", "amount", "role", "status", "score"] },
-      { label: "B5. Research Guidance", rows: research, fields: B5_FIELDS, fieldsForRow: b5FieldsForRow, rowMax: b5RowMax },
-      { label: "B6. Consultancy, Testing & Training", rows: proposals, fields: ["agency", "duration", "amount", "score"], rowMax: B6_CONSULTANCY_MAX, maxScore: B6_CONSULTANCY_MAX },
-      { label: "B7. Conference / FDP Contributions - Organised", rows: confs, fields: ["title", "role", "date", "level", "score"], rowMax: B7_CONFERENCE_MAX, maxScore: B7_CONFERENCE_MAX },
-      { label: "B8. Conference / FDP / Industry Training Attended", rows: fdps, fields: ["program", "fromDate", "toDate", "org", "score"], rowMax: B8_ATTENDED_MAX, maxScore: B8_ATTENDED_MAX },
-      { label: "B8. Industrial Training", rows: training, fields: ["company", "duration", "nature", "score"], rowMax: B8_ATTENDED_MAX, maxScore: B8_ATTENDED_MAX },
-      { label: "B9. Research Awards, Fellowships & Citations", rows: awards, fields: ["title", "date", "agency", "level", "score"], rowMax: B9_AWARDS_MAX, maxScore: B9_AWARDS_MAX },
-      { label: "B10. Innovation, Start-ups & Technology Transfer", rows: products, fields: ["details", "role", "status", "score"], rowMax: B10_STARTUP_MAX, maxScore: B10_STARTUP_MAX },
-      { label: "B11. ICT Content, MOOCs & E-Learning", rows: ict, fields: ["title", "type", "quad", "score"], rowMax: B3_ICT_MAX, maxScore: B3_ICT_MAX },
-    ];
-    const errors = validateCompleteRows(withRelaxedSectionCap(sections), docs);
-    [...projects2, ...externalProjects].forEach((row, index) => {
-      if (row.date && !isValidDDMMYYYY(row.date)) errors.push(`B4 project row ${index + 1}: date must be DD/MM/YYYY.`);
-    });
-    fdps.forEach((row, index) => {
-      if (row.fromDate && !isValidDDMMYYYY(row.fromDate)) errors.push(`B8 row ${index + 1}: From date must be DD/MM/YYYY.`);
-      if (row.toDate && !isValidDDMMYYYY(row.toDate)) errors.push(`B8 row ${index + 1}: To date must be DD/MM/YYYY.`);
-    });
-    if (errors.length) { alert(errors.join("\n")); return false; }
-    return true;
-  };
-
-  const validateSelfAppraisalSectionRows = (section) => {
-    const partASections = [
-      { label: "A(i). Lectures", rows: lectures, fields: ["sem", "code", "planned", "conducted", "score"] },
-      { label: "A(ii). Course File", rows: courseFile, fields: ["course", "title", "details", "score"] },
-      { label: "A(iii). Innovative Teaching Methods", rows: innovRows, fields: ["method", "details", "score"], fieldsForRow: (row) => row?.method === OTHER_INNOVATIVE_METHOD ? ["method", "methodOther", "details", "score"] : ["method", "details", "score"] },
-      { label: "A5. Learning Outcomes Attainment & OBE Practice", rows: obeRows, fields: ["component", "score"], isRowActive: evidenceClaimedOrScored },
-      { label: "A6. Student Project Guidance", rows: projects, fields: ["label", "score"], rowMax: A6_PROJECT_GUIDANCE_MAX, maxScore: A6_PROJECT_GUIDANCE_MAX },
-      { label: "A7. Student Mentoring & Counselling", rows: mentoringRows, fields: ["activity", "score"], isRowActive: evidenceClaimedOrScored },
-      { label: "A8. Professional Development & Qualification Enhancement", rows: quals, fields: ["label", "score"] },
-      { label: "A(vi). Student Feedback", rows: feedback, fields: ["code", "fb1", "fb2"] },
-    ];
-    const partCSections = [
-      { label: "C1. Administration at University Level", rows: uniActs, fields: ["activity", "nature", "period", "score"] },
-      { label: "C2. Administration at School Level", rows: deptActs, fields: ["activity", "nature", "period", "score"] },
-      { label: "C3. Event Organisation & Institutional Visibility", rows: eventRows, fields: ["event", "role", "date", "level", "score"] },
-      { label: "C4. Outreach, Extension & Social Responsibility", rows: society, fields: ["label", "details", "date", "score"], rowMax: C4_OUTREACH_MAX, maxScore: C4_OUTREACH_MAX },
-      { label: "C5. Industry Interaction & Linkages", rows: industry, fields: ["activity", "partner", "date", "score"], rowMax: C5_INDUSTRY_MAX, maxScore: C5_INDUSTRY_MAX },
-      { label: "C6. Alumni Engagement & Networking", rows: alumniRows, fields: ["activity", "details", "date", "score"] },
-      { label: "C7. Student Placement Mentoring & Career Development", rows: placementRows, fields: ["activityType", "name", "date", "score"] },
-    ];
-    const partBSections = [
-      { label: "B1. Journals", rows: journals, fields: ["title", "journal", "issn", "index", "score"], rowMax: B1_JOURNAL_MAX, maxScore: B1_JOURNAL_MAX },
-      { label: "B2. Books / Chapters", rows: books, fields: ["title", "book", "issn", "pub", "coauth", "first", "score"], rowMax: B2_BOOK_MAX, maxScore: B2_BOOK_MAX },
-      { label: "B3. Patents, Copyrights & IP and Product Development", rows: patents, fields: ["title", "type", "status", "fileNo", "score"], rowMax: B3_PATENT_MAX, maxScore: B3_PATENT_MAX },
-      { label: "B4. External Funded Research Projects", rows: projects2, fields: ["title", "agency", "date", "amount", "role", "status", "score"] },
-      { label: "B5. Research Guidance", rows: research, fields: B5_FIELDS, fieldsForRow: b5FieldsForRow, rowMax: b5RowMax },
-      { label: "B6. Consultancy, Testing & Training", rows: proposals, fields: ["agency", "duration", "amount", "score"], rowMax: B6_CONSULTANCY_MAX, maxScore: B6_CONSULTANCY_MAX },
-      { label: "B7. Conference / FDP Contributions - Organised", rows: confs, fields: ["title", "role", "date", "level", "score"], rowMax: B7_CONFERENCE_MAX, maxScore: B7_CONFERENCE_MAX },
-      { label: "B8. Conference / FDP / Industry Training Attended", rows: fdps, fields: ["program", "fromDate", "toDate", "org", "score"], rowMax: B8_ATTENDED_MAX, maxScore: B8_ATTENDED_MAX },
-      { label: "B8. Industrial Training", rows: training, fields: ["company", "duration", "nature", "score"], rowMax: B8_ATTENDED_MAX, maxScore: B8_ATTENDED_MAX },
-      { label: "B9. Research Awards, Fellowships & Citations", rows: awards, fields: ["title", "date", "agency", "level", "score"], rowMax: B9_AWARDS_MAX, maxScore: B9_AWARDS_MAX },
-      { label: "B10. Innovation, Start-ups & Technology Transfer", rows: products, fields: ["details", "role", "status", "score"], rowMax: B10_STARTUP_MAX, maxScore: B10_STARTUP_MAX },
-      { label: "B11. ICT Content, MOOCs & E-Learning", rows: ict, fields: ["title", "type", "quad", "score"], rowMax: B3_ICT_MAX, maxScore: B3_ICT_MAX },
-    ];
-    const sectionMap = { partA: partASections, partB: partBSections, partC: partCSections, partD: [], partE: [] };
-    const errors = validateCompleteRows(withRelaxedSectionCap(sectionMap[section] || partASections), docs);
-    if (section === "partB") {
-      [...projects2, ...externalProjects].forEach((row, index) => {
-        if (row.date && !isValidDDMMYYYY(row.date)) errors.push(`B4 project row ${index + 1}: date must be DD/MM/YYYY.`);
-      });
-      fdps.forEach((row, index) => {
-        if (row.fromDate && !isValidDDMMYYYY(row.fromDate)) errors.push(`B8 row ${index + 1}: From date must be DD/MM/YYYY.`);
-        if (row.toDate && !isValidDDMMYYYY(row.toDate)) errors.push(`B8 row ${index + 1}: To date must be DD/MM/YYYY.`);
-      });
-    }
-    if (errors.length) {
-      alert(errors.join("\n"));
-      return false;
-    }
-    return true;
-  };
-
-  const isMyAppraisalSectionOpen = (_section) => true;
 
   const handleMyAppraisalSectionChange = (section) => {
     setHodAppraisalTab(section);
-    requestAnimationFrame(() => {
-      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+  };
+
+  // Dummy test data filler
+  const fillStandardDummyData = () => {
+    setSem1Workload([
+      { class: "B.Tech CSE Sem 5", subject: "Database Systems", planned: "45", conducted: "42", score: "20" },
+      { class: "B.Tech CSE Sem 3", subject: "Data Structures", planned: "40", conducted: "38", score: "20" },
+    ]);
+    setSem2Workload([
+      { class: "B.Tech CSE Sem 6", subject: "Web Development", planned: "42", conducted: "40", score: "20" },
+    ]);
+    setEContentRows([
+      { subject: "Database Systems", topic: "SQL Indexing Video Lecture", link: "https://youtube.com/example", score: "3" },
+      { subject: "Data Structures", topic: "Binary Search Tree Animation", link: "https://portal.dypiu.ac.in", score: "3" },
+    ]);
+    setInnovRows([
+      { subject: "Web Development", innovation: "Project-Based Learning", description: "Students built full stack web apps", score: "2" },
+      { subject: "Database Systems", innovation: "Flipped Classroom", description: "Active problem solving sessions", score: "2" },
+    ]);
+    setSem1Feedback([
+      { subject: "Database Systems", feedbackPct: "88" },
+      { subject: "Data Structures", feedbackPct: "86" },
+    ]);
+    setSem2Feedback([
+      { subject: "Web Development", feedbackPct: "90" },
+    ]);
+    setSem1FeedbackSelfScore("5");
+    setSem2FeedbackSelfScore("5");
+    setInstAdmin([
+      { name: "NAAC Steering Committee", role: "Institute Level Coordinator/Head", score: "10" },
+    ]);
+    setDeptAdmin([
+      { name: "Department Timetable Committee", role: "Department Level Coordinator", score: "5" },
+    ]);
+    setSem1Results([
+      { subject: "Database Systems", passingPct: "85", prevYearResult: "82", difficulty: "Medium", score: "7" },
+    ]);
+    setSem2Results([
+      { subject: "Web Development", passingPct: "88", prevYearResult: "85", difficulty: "Easy", score: "7" },
+    ]);
+    setExamDuties(
+      FIXED_EXAM_DUTIES.map((duty) => ({ duty, details: "Completed successfully", score: "2" }))
+    );
+    setExtensionActs([
+      { particular: "NSS Village Survey Camp", hours: "30", dateFrom: "10/09/2026", dateTo: "15/09/2026", score: "5" },
+      { particular: "Industrial Visit to IT Park", hours: "16", dateFrom: "20/10/2026", dateTo: "21/10/2026", score: "5" },
+    ]);
+    setObeRows(
+      FIXED_OBE_ITEMS.map((item) => ({ particular: item, available: "Yes", score: "4" }))
+    );
+    setPartEvents([
+      { event: "AI & ML National FDP", organizedBy: "IIT Bombay", dateDuration: "5 Days", score: "5" },
+      { event: "Outcome Based Education Workshop", organizedBy: "NITTTR", dateDuration: "3 Days", score: "5" },
+    ]);
+    setCondEvents([
+      { event: "Python Programming Workshop", date: "15/11/2026", duration: "2 Days", score: "5" },
+    ]);
+    setInvitedTeachers([
+      { event: "Keynote on Cloud Computing", organizedBy: "State Tech University", dateDuration: "1 Day", level: "State", score: "2" },
+    ]);
+    setNptelCerts([
+      { subject: "Cloud Computing", duration: "12 Weeks", dateCompletion: "Nov 2026", pctScore: "82%", score: "5" },
+    ]);
+    setInternships([
+      { studentName: "Group A (4 Students)", industryName: "TCS Innovation Labs", stipendDuration: "6 Months", progressReport: "Yes", score: "5" },
+      { studentName: "Group B (3 Students)", industryName: "Infosys Campus", stipendDuration: "3 Months", progressReport: "Yes", score: "5" },
+    ]);
+    setMentoringRows([
+      { classDiv: "B.Tech CSE-A", numStudents: "20", freqMeetings: "Monthly", totalMeetings: "4", score: "10" },
+    ]);
+    setCollaborations([
+      { particular: "Joint Research Activity", industryName: "Tech Solutions Pvt Ltd", nature: "Research & Training", score: "5" },
+    ]);
+    setSponsoredProjects([
+      { projectTitle: "Smart Agriculture Monitoring", amount: "2.5 Lakhs", sponsoringAgency: "DYP Seed Grant", score: "5" },
+    ]);
+    setResearchGrants([
+      { title: "IoT Sensor Network for Smart Farming", fundingAgency: "DST-SERB (3 Years)", grantAmount: "15.5", score: "10" },
+    ]);
+    setUgcJournals([
+      { title: "Efficient Data Indexing in Distributed Systems", journal: "Journal of Computer Science", publisher: "UGC Care", issn: "1234-5678", authorPosition: "1st Author", score: "3" },
+    ]);
+    setIndexedJournals([
+      { title: "Deep Learning for Agricultural Disease Detection", journal: "IEEE Transactions on Agriculture", citationIndex: "14", hIndex: "8", authorPosition: "1st Author", score: "10" },
+    ]);
+    setConferences([
+      { title: "Cloud Optimization Techniques", conference: "International Conference on Computing", proceedingsTitle: "IEEE Xplore", score: "2.5" },
+    ]);
+    setBooksChapters([
+      { type: "Book", title: "Modern Software Engineering Practices", chapterName: "-", publisher: "Springer Nature", score: "5" },
+    ]);
+    setReviewerEditorial([
+      { journalBook: "Journal of Systems & Software", level: "International", role: "Reviewer", score: "5" },
+    ]);
+    setPatentsCopyrights([
+      { title: "System for Crop Health Monitoring", type: "Utility Patent", appNo: "202641098765", status: "Published", score: "10" },
+    ]);
+    setDevelopmentActs([
+      { activity: "Setup of Advanced IoT Research Laboratory", fundingAmount: "3 Lakhs", score: "5" },
+    ]);
+    setConsultancyRows([
+      { area: "Software Architecture Review", fundsGenerated: "50000", score: "5" },
+    ]);
+    setAwardsRows([
+      { particular: "Best Faculty Researcher Award", agency: "University Council", score: "5" },
+    ]);
+    setOtherAchievements([
+      { achievement: "Senior IEEE Member Elevation", level: "International", score: "5" },
+    ]);
+    setPersonalAttributes(
+      FIXED_PERSONAL_ATTRIBUTES.map((attr) => ({ attribute: attr, score: "1" }))
+    );
+  };
+
+  // Faculty self-declaration submit — UI-only for now. The DYPATU SAR form has its own
+  // 300-mark field shape and is not yet wired to the (old-form-specific) submitAppraisal
+  // service, so this only records the declaration + locks the button locally.
+  const handleSubmitAppraisal = () => {
+    if (!declarationChecked || submitted) return;
+    setSubmitted(true);
+  };
+
+  // Full DYPATU SAR report (Part A, Sections 1-10, Summary, Declaration, and the
+  // evaluator sheets that follow in the PDF). Built by sarReport.js — self-contained
+  // and specific to this form; does not reuse the old Standard Appraisal report
+  // generator or its 700/725-mark totals, which belong to a different form shape.
+  const handleGenerateReport = () => {
+    openSarReport({
+      info,
+      sem1Workload, sem2Workload, eContentRows, innovRows,
+      sem1Feedback, sem2Feedback, sem1FeedbackSelfScore, sem2FeedbackSelfScore,
+      instAdmin, deptAdmin,
+      sem1Results, sem2Results, examDuties,
+      extensionActs,
+      obeRows, partEvents, condEvents, invitedTeachers, nptelCerts,
+      internships, mentoringRows,
+      collaborations, sponsoredProjects,
+      researchGrants, ugcJournals, indexedJournals, conferences, booksChapters,
+      reviewerEditorial, patentsCopyrights, developmentActs, consultancyRows,
+      awardsRows, otherAchievements,
+      personalAttributes,
+      sec1Total, sec2Total, sec3Total, sec4Total, sec5Total,
+      sec6Total, sec7Total, sec8Total, sec9Total, sec10Total,
+      grandTotal,
+      titleNameFallback,
     });
-  };
-
-  const buildSelfDraftForm = (saveStatus = sectionSaveStatus) => normalizeAutoScores({ info: profileSafeInfoForYear(info, info.ay, defaultDesignation), lectures, courseFile, innovDetails: innovRows.map((row) => row.method).filter(Boolean).join(", "), innovScore: innovScoreComputed, innovRows: innovRows.map((row) => ({ ...row, max: row.max || A3_INNOVATIVE_ROW_MAX })), projects, obeRows, mentoringRows, quals, feedback, deptActs, uniActs, eventRows, society: society.map((row) => ({ ...row, max: row.max || C4_OUTREACH_MAX })), industry, alumniRows, placementRows, acr, leaveManagement, journals, books, ict, research, projects2: projects2.map((row) => ({ ...row, max: row.max || B4_PROJECT_MAX })), externalProjects, patents, awards, confs, proposals, products, fdps, training, exhibitions, summaryOtherInfo, sectionSaveStatus: saveStatus });
-
-  const markSnapshotLocked = () => {
-    setAppraisalLocked(true);
-    setWorkflowDeclaration((current) => current || { status: "Submitted" });
-  };
-
-  const autoSaveReadyRef = useRef(false);
-  const autoSaveInFlightRef = useRef(false);
-  const queuedAutoSaveRef = useRef(null);
-  const lastAutoSavedFingerprintRef = useRef("");
-
-  useEffect(() => {
-    const userEmail = sessionStorage.getItem("username") || sessionStorage.getItem("email");
-    if (!autoSaveReadyRef.current) {
-      autoSaveReadyRef.current = true;
-      return undefined;
-    }
-    if (!userEmail || !info.ay || formLocked || submitting || showClosedReportOnly || isLegacyTwoPartYear || (!isSelectedCycleOpen && !canSaveDraft(appraisalWindowStatus))) return undefined;
-
-    const formSnapshot = buildSelfDraftForm();
-    const totalsSnapshot = { partATotal, partBTotal, partCTotal, partDTotal, grandTotal, effectivePartAMax, effectivePartBMax, effectivePartCMax: PART_C_MAX, effectivePartDMax: PART_D_MAX, effectiveGrandMax };
-    const fingerprint = JSON.stringify({ form: formSnapshot, docs, totals: totalsSnapshot });
-    if (fingerprint === lastAutoSavedFingerprintRef.current) return undefined;
-
-    const payload = {
-      fingerprint,
-      facultyEmail: userEmail,
-      academicYear: info.ay,
-      form: formSnapshot,
-      totals: totalsSnapshot,
-      docs,
-      submitterProfile: profileFromsessionStorage(),
-      sectionSaveStatus,
-    };
-
-    const runAutoSave = async (snapshot) => {
-      if (autoSaveInFlightRef.current) {
-        queuedAutoSaveRef.current = snapshot;
-        return;
-      }
-      autoSaveInFlightRef.current = true;
-      try {
-        await saveAppraisalDraftSection(snapshot);
-        lastAutoSavedFingerprintRef.current = snapshot.fingerprint;
-      } catch (err) {
-        if (err?.statusCode === 403 || err?.response?.status === 403) {
-          markSnapshotLocked();
-        } else {
-          console.warn("Auto-save failed:", err);
-        }
-      } finally {
-        autoSaveInFlightRef.current = false;
-        const queuedSnapshot = queuedAutoSaveRef.current;
-        queuedAutoSaveRef.current = null;
-        if (queuedSnapshot && queuedSnapshot.fingerprint !== lastAutoSavedFingerprintRef.current) {
-          window.setTimeout(() => runAutoSave(queuedSnapshot), 0);
-        }
-      }
-    };
-
-    const timer = window.setTimeout(() => {
-      runAutoSave(payload);
-    }, 1800);
-
-    return () => window.clearTimeout(timer);
-  }, [info, lectures, courseFile, innovRows, projects, obeRows, mentoringRows, quals, feedback, deptActs, uniActs, eventRows, society, industry, alumniRows, placementRows, acr, leaveManagement, journals, books, ict, research, projects2, externalProjects, patents, awards, confs, proposals, products, fdps, training, exhibitions, summaryOtherInfo, docs, sectionSaveStatus, formLocked, submitting, showClosedReportOnly, isLegacyTwoPartYear, isSelectedCycleOpen, appraisalWindowStatus, partATotal, partBTotal, partCTotal, partDTotal, grandTotal, effectivePartAMax, effectivePartBMax, effectiveGrandMax]);
-
-  const handleSaveCurrentSection = async (section, navigateNext = true) => {
-    if (formLocked) return;
-    const userEmail = sessionStorage.getItem("username") || sessionStorage.getItem("email");
-    if (!userEmail) {
-      alert("Please login again before saving. Your session email was not found.");
-      navigate("/login", { replace: true });
-      return;
-    }
-    if (!isSelectedCycleOpen) {
-      let latestWindowStatus;
-      try {
-        latestWindowStatus = await getAppraisalWindowStatus({ academicYear: info.ay });
-        setAppraisalWindowStatus(latestWindowStatus);
-        setAppraisalWindowError("");
-      } catch (err) {
-        const message = appraisalWindowErrorMessage(err);
-        setAppraisalWindowError(message);
-        alert(message);
-        return;
-      }
-      if (!canSaveDraft(latestWindowStatus)) {
-        alert("Draft saving is disabled because appraisal submission is closed.");
-        return;
-      }
-    }
-    const nextStatus = { ...sectionSaveStatus, [section]: true };
-    setSavingSection(section);
-    try {
-      await saveAppraisalDraftSection({
-        facultyEmail: userEmail,
-        academicYear: info.ay,
-        form: buildSelfDraftForm(nextStatus),
-        totals: { partATotal, partBTotal, partCTotal, partDTotal, grandTotal, effectivePartAMax, effectivePartBMax, effectivePartCMax: PART_C_MAX, effectivePartDMax: PART_D_MAX, effectiveGrandMax },
-        docs,
-        submitterProfile: profileFromsessionStorage(),
-        sectionSaveStatus: nextStatus,
-      });
-      setSectionSaveStatus(nextStatus);
-      if (navigateNext) {
-        const NEXT_SECTION = { partA: "partB", partB: "partC", partC: "partD", partD: "partE", partE: "summary" };
-        const nextTab = NEXT_SECTION[section];
-        if (nextTab) {
-          setHodAppraisalTab(nextTab);
-          requestAnimationFrame(() => {
-            window.scrollTo({ top: 0, left: 0, behavior: "auto" });
-          });
-        }
-      }
-    } catch (err) {
-      if (err?.statusCode === 403 || err?.response?.status === 403) {
-        markSnapshotLocked();
-        return;
-      }
-      alert(`Unable to save draft.\n\n${err.message}`);
-    } finally {
-      setSavingSection(null);
-    }
-  };
-  const handleSubmitAppraisal = async () => {
-    if (formLocked) {
-      alert("This appraisal has already been submitted and is locked for review.");
-      return;
-    }
-    if (!isSelectedCycleOpen) {
-      let latestWindowStatus;
-      try {
-        latestWindowStatus = await getAppraisalWindowStatus({ academicYear: info.ay });
-        setAppraisalWindowStatus(latestWindowStatus);
-        setAppraisalWindowError("");
-      } catch (err) {
-        const message = appraisalWindowErrorMessage(err);
-        setAppraisalWindowError(message);
-        alert(message);
-        return;
-      }
-      if (!canSubmitAppraisal(latestWindowStatus)) {
-        alert("Appraisal submission is closed for this academic year.");
-        return;
-      }
-    }
-    if (!declarationConfirmed) {
-      alert("Please tick the declaration checkbox before submitting.");
-      return;
-    }
-    if (!attachmentsConfirmed) {
-      alert("Please confirm that all required supporting documents and attachments have been uploaded.");
-      return;
-    }
-    if (!validateSelfAppraisalRows()) return;
-
-    // 1. Basic Validation
-    if (!info.name || !info.ay) {
-      alert("Please fill in basic faculty information (Name, Academic Year).");
-      setHodAppraisalTab("partA");
-      return;
-    }
-
-    const userEmail = sessionStorage.getItem("username") || sessionStorage.getItem("email");
-    if (!userEmail) {
-      alert("Please login again before submitting. Your email was not found in this session.");
-      navigate("/login", { replace: true });
-      return;
-    }
-
-    const workflowError = workflowValidationError(profileFromsessionStorage());
-    if (workflowError) {
-      alert(workflowError);
-      return;
-    }
-
-    const confirmSubmit = window.confirm("Are you sure you want to submit your appraisal? This will save your data to the database.");
-    if (!confirmSubmit) return;
-
-    setSubmitting(true);
-    try {
-      const reviewChain = getReviewChain(profileFromsessionStorage());
-      const nextReviewer = reviewChain[0];
-      const workflowStatus = nextReviewer ? pendingStatusFor(nextReviewer) : "Submitted";
-
-      // 2. Submit all form data via API
-      const submitterProfile = profileFromsessionStorage();
-
-      const submittedAt = new Date().toISOString();
-      await submitAppraisal({
-        facultyEmail: userEmail,
-        academicYear: info.ay,
-        form: buildSelfDraftForm(),
-        totals: { partATotal, partBTotal, partCTotal, partDTotal, grandTotal, effectivePartAMax, effectivePartBMax, effectivePartCMax: PART_C_MAX, effectivePartDMax: PART_D_MAX, effectiveGrandMax },
-        docs,
-        submitterProfile,
-        activeProfile: submitterProfile,
-      });
-      alert("Appraisal submitted successfully!");
-      setAppraisalLocked(true);
-      setWorkflowDeclaration({
-        status: workflowStatus,
-        submitted_at: submittedAt,
-        updated_at: submittedAt,
-      });
-      setWorkflowReviews([]);
-    } catch (err) {
-      console.error("Submission error:", err);
-      alert(`Unable to submit appraisal.\n\n${err.message}`);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const generateReport = async () => {
-    const win = window.open('', '_blank');
-    if (!win) { alert("Please allow popups to generate the report."); return; }
-    const logoSrc = await fetchImageAsDataUrl("/image.png");
-    const iqacLogoSrc = await fetchImageAsDataUrl("/IQAS.png");
-
-    const html = `
-  <html>
-  <head>
-    <title>Faculty Appraisal</title>
-
-    <style>
-      @page { size: A4; margin: 12mm; }
-      * { box-sizing: border-box; }
-      body { font-family: "Times New Roman", Times, serif; font-size: 10.8px; line-height: 1.34; color: #111; background: #fff; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      h1 { text-align: center; font-size: 14px; line-height: 1.18; letter-spacing: .45px; margin: 0 0 4px; text-transform: uppercase; color: #111; font-weight: 700; }
-      h2 { text-align: center; font-size: 11px; line-height: 1.25; margin: 2px 0; color: #111; font-weight: 700; }
-      h3 { font-size: 11px; line-height: 1.25; margin: 10px 0 5px; color: #111; break-after: avoid; font-weight: 700; }
-      h3[style*="background"] { background: #f1f3f5 !important; border: none !important; border-top: 1.6px solid #111 !important; border-bottom: 1.2px solid #111 !important; border-radius: 0 !important; padding: 6px 0 !important; margin: 14px 0 8px !important; color: #111 !important; text-align: center !important; text-transform: uppercase; letter-spacing: .25px; }
-      table { width: 100%; border-collapse: collapse !important; margin-bottom: 10px; table-layout: fixed; border: 1.15px solid #6b7280 !important; background: #fff; page-break-inside: auto; }
-      thead { display: table-header-group; }
-      tfoot { display: table-footer-group; }
-      tr { page-break-inside: avoid; page-break-after: auto; }
-      th, td { border: 1px solid #aeb6c2 !important; padding: 4.8px 6px; word-wrap: break-word; overflow-wrap: anywhere; vertical-align: top; }
-      th { background: #eef0f3 !important; text-align: center; font-weight: bold; color: #111; }
-      td[style*="background:#d9d9d9"] { background: #eef0f3 !important; color: #111 !important; text-transform: uppercase; letter-spacing: .2px; }
-      tr[style*="background:#bfbfbf"] td { background: #d9dde3 !important; color: #111 !important; }
-      .c { text-align: center; }
-      .b { font-weight: bold; }
-      .pb { page-break-before: always; }
-      .tr { background: #f6f7f9 !important; font-weight: bold; }
-      .ht { width: 100%; border: none !important; border-bottom: 2px solid #111 !important; margin-bottom: 9px; padding-bottom: 5px; background: transparent; }
-      .ht td { border: none !important; padding: 0 4px; vertical-align: middle; }
-      .logo { width: 17mm; max-height: 22mm; object-fit: contain; height: auto; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      .ht + table { border-color: #6b7280 !important; margin-bottom: 11px; }
-      .ht + table td:first-child { background: #f6f7f9 !important; font-weight: 700; width: 35%; }
-      .st { border: 1.35px solid #4b5563 !important; }
-      .st th { background: #dfe3e8 !important; color: #111; }
-      .st .tr, .st tr[style*="background:#bfbfbf"] { background: #dfe3e8 !important; font-weight: bold; }
-      .remarks { white-space: pre-wrap; border: 1px solid #6b7280 !important; padding: 8px; min-height: 34px; margin-bottom: 10px; background: #fff; }
-      .declaration-table { border: none !important; margin-bottom: 14px !important; }
-      .declaration-table td { border: none !important; background: #fff !important; }
-    </style>
-  </head>
-
-  <body>
-
-    <table class="ht"><tr>
-      <td style="width:20%;text-align:left"><img class="logo" src="${logoSrc}" alt="DYPIU" /></td>
-      <td style="text-align:center">
-        <h1>D Y PATIL INTERNATIONAL UNIVERSITY, AKURDI, PUNE</h1>
-        <h2>Faculty Appraisal Form - Academic Year ${info.ay || ""}</h2>
-      </td>
-      <td style="width:20%;text-align:right"><img class="logo" src="${iqacLogoSrc}" alt="IQAC" /></td>
-    </tr></table>
-
-    <table>
-      <tr><td class="b" style="width:35%">Name of Faculty</td><td>${reportTextValue(info.name)}</td></tr>
-      <tr><td class="b">Educational Qualifications</td><td>${reportQualification(info)}</td></tr>
-      <tr><td class="b">Present Designation</td><td>${reportTextValue(info.desig)}</td></tr>
-      <tr><td class="b">School / Department</td><td>${reportTextValue(info.school)}</td></tr>
-      <tr><td class="b">Experience</td><td>${reportExperience(info)}</td></tr>
-    </table>
-
-    <h3 style="background:#d9d9d9;padding:4px;text-align:center;font-size:13px">PART A - Teaching Process &amp; Academic Activities</h3>
-
-    <h3>A1. Course Delivery &amp; Classroom Engagement &nbsp;(Max 40)</h3>
-    <table>
-      <tr><th>SN</th><th>Semester</th><th>Course Code / Name</th><th>Classes as per Course Structure</th><th>Classes Actually Conducted</th><th>Self Score</th></tr>
-      ${lectures.map((l, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(l.sem)}</td><td>${reportTextValue(l.code)}</td><td class="c">${reportTextValue(l.planned)}</td><td class="c">${reportTextValue(l.conducted)}</td><td class="c">${reportTextValue(l.score)}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="5" class="c b">Total Score (Max 40)</td><td class="c">${totalLecScore > 0 ? totalLecScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    <h3>A2. Course File &amp; Curriculum Documentation &nbsp;(Max 20)</h3>
-    <table>
-      <tr><th>SN</th><th>Course / Paper</th><th>Program & Semester</th><th>Details</th><th>Self Score</th></tr>
-      ${courseFile.map((c, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(c.course)}</td><td>${reportTextValue(c.title)}</td><td>${reportTextValue(c.details)}</td><td class="c">${reportTextValue(c.score)}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="4" class="c b">Total Score (Max 20)</td><td class="c">${courseFileScore > 0 ? courseFileScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    <h3>A3. Innovative Teaching-Learning Methods &nbsp;(Max 20)</h3>
-    <table>
-      <tr><th>SN</th><th>Methods Used</th><th>Details</th><th>Self Score</th></tr>
-      ${innovRows.map((r, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(r.method)}</td><td>${reportTextValue(r.details)}</td><td class="c">${reportTextValue(r.score)}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="3" class="c b">Total Score (Max 20)</td><td class="c">${innovTotal > 0 ? innovTotal.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    <h3>A4. Student Feedback Score &nbsp;(Max 10)</h3>
-    <table>
-      <tr><th>SN</th><th>Course Code / Name</th><th>First Student Feedback As per Juno</th><th>Second Student Feedback As Per Juno</th><th>Average</th><th>Self Score</th></tr>
-      ${feedback.map((f, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(f.code)}</td><td class="c">${reportTextValue(f.fb1)}</td><td class="c">${reportTextValue(f.fb2)}</td><td class="c">${(f.fb1 || f.fb2) ? ((n(f.fb1) + n(f.fb2)) / ((f.fb1 ? 1 : 0) + (f.fb2 ? 1 : 0) || 1)).toFixed(2) : '&nbsp;'}</td><td class="c">${reportTextValue(f.score)}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="5" class="c b">Total (Max 10)</td><td class="c">${stuFeedbackScore > 0 ? stuFeedbackScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    <h3>A5. Learning Outcomes Attainment &amp; OBE Practice &nbsp;(Max 20)</h3>
-    <table>
-      <tr><th>SN</th><th>Component</th><th>Evidence Attached (Yes/No)</th><th>Self Score</th></tr>
-      ${obeRows.map((r, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(r.component)}</td><td>${reportTextValue(r.evidence)}</td><td class="c">${reportTextValue(r.score)}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="3" class="c b">Total (Max 20)</td><td class="c">${obeScore > 0 ? obeScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    ${`
-    <h3>A6. Student Project Guidance &nbsp;(Max 20)</h3>
-    <table>
-      <tr><th>SN</th><th>Project Type</th><th>Self Score</th></tr>
-      ${projects.map((p, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(p.label)}</td><td class="c">${reportTextValue(clampScore(p.score, projectGuidanceRowMax(p)))}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="2" class="c b">Total Score (Max 20)</td><td class="c">${projectTotal > 0 ? projectTotal.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>`}
-
-    <h3>A7. Student Mentoring &amp; Counselling &nbsp;(Max 10)</h3>
-    <table>
-      <tr><th>SN</th><th>Activity</th><th>Evidence Attached (Yes/No)</th><th>Self Score</th></tr>
-      ${mentoringRows.map((r, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(r.activity)}</td><td>${reportTextValue(r.evidence)}</td><td class="c">${reportTextValue(r.score)}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="3" class="c b">Total (Max 10)</td><td class="c">${mentoringScore > 0 ? mentoringScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    <h3>A8. Professional Development &amp; Qualification Enhancement &nbsp;(Max 10)</h3>
-    <table>
-      <tr><th>SN</th><th>Qualification / Category</th><th>Self Score</th></tr>
-      ${quals.map((q, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(q.label)}</td><td class="c">${reportTextValue(String(q.score ?? "").trim() ? clampScore(q.score, A8_QUALIFICATION_MAX) : "")}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="2" class="c b">Total Score (Max 10)</td><td class="c">${qualTotal > 0 ? qualTotal.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    <div class="pb"></div>
-    <h3 style="background:#d9d9d9;padding:4px;text-align:center;font-size:13px">PART B - Research &amp; Innovation</h3>
-
-    <h3>B1. Journal Publications &nbsp;(Max 100)</h3>
-    <table>
-      <tr><th>SN</th><th>Title with Page Nos.</th><th>Journal Details</th><th>ISSN/ISBN No.</th><th>Journal Indexing</th><th>Self Score</th></tr>
-      ${journals.map((j, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(j.title)}</td><td>${reportTextValue(j.journal)}</td><td class="c">${reportTextValue(j.issn)}</td><td class="c">${reportTextValue(j.index)}</td><td class="c">${reportTextValue(j.score)}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="5" class="c b">Total (Max 100)</td><td class="c">${journalScore > 0 ? journalScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    <h3>B2. Books, Book Chapters &amp; Edited Volumes &nbsp;(Max 30)</h3>
-    <table>
-      <tr><th>SN</th><th>Title with Page Nos.</th><th>Book Title, Editor &amp; Publisher</th><th>ISSN/ISBN</th><th>Type of Publisher</th><th>Co-authors</th><th>First Author</th><th>Self Score</th></tr>
-      ${books.map((b, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(b.title)}</td><td>${reportTextValue(b.book)}</td><td class="c">${reportTextValue(b.issn)}</td><td>${reportTextValue(b.pub)}</td><td>${reportTextValue(b.coauth)}</td><td class="c">${reportTextValue(b.first)}</td><td class="c">${reportTextValue(b.score)}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="7" class="c b">Total (Max 30)</td><td class="c">${bookScore > 0 ? bookScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    <h3>B3. Patents, Copyrights &amp; IP and Product Development &nbsp;(Max 40)</h3>
-    <table>
-      <tr><th>SN</th><th>Title</th><th>National / International</th><th>Date of Filing</th><th>Status</th><th>Patent File No.</th><th>Self Score</th></tr>
-      ${patents.map((p, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(p.title)}</td><td class="c">${reportTextValue(p.type)}</td><td class="c">${reportTextValue(p.date)}</td><td>${reportTextValue(p.status)}</td><td class="c">${reportTextValue(p.fileNo)}</td><td class="c">${reportTextValue(p.score)}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="6" class="c b">Total (Max 40)</td><td class="c">${patentScore > 0 ? patentScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    <h3>B4. External Funded Research Projects &nbsp;(Max 40)</h3>
-    <table>
-      <tr><th>SN</th><th>Title</th><th>Funding Agency</th><th>Date of Sanction</th><th>Grant Amount</th><th>Role</th><th>Status</th><th>Self Score</th></tr>
-      ${projects2.map((p, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(p.title)}</td><td>${reportTextValue(p.agency)}</td><td class="c">${reportTextValue(p.date)}</td><td class="c">${reportTextValue(p.amount)}</td><td>${reportTextValue(p.role)}</td><td>${reportTextValue(p.status)}</td><td class="c">${reportTextValue(p.score)}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="7" class="c b">Total (Max 40)</td><td class="c">${projectBScore > 0 ? projectBScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    <h3>Legacy External Research Projects &nbsp;(Not counted in AY 2026-2027 total)</h3>
-    <table>
-      <tr><th>SN</th><th>Title</th><th>Funding Agency</th><th>Date of Sanction</th><th>Grant Amount</th><th>Role</th><th>Status</th><th>Self Score</th></tr>
-      ${externalProjects.map((p, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(p.title)}</td><td>${reportTextValue(p.agency)}</td><td class="c">${reportTextValue(p.date)}</td><td class="c">${reportTextValue(p.amount)}</td><td>${reportTextValue(p.role)}</td><td>${reportTextValue(p.status)}</td><td class="c">${reportTextValue(p.score)}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="7" class="c b">Total (Max 0)</td><td class="c">${externalProjectScore > 0 ? externalProjectScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    ${`
-    <h3>B5. Research Guidance &nbsp;(Max 20)</h3>
-    <table>
-      <tr><th>SN</th><th>Degree</th><th>Name of Student</th><th>Status</th><th>Date</th><th>Self Score</th></tr>
-      ${research.map((r, i) => `<tr><td class="c">${i + 1}</td><td class="c">${reportTextValue(r.degree)}</td><td>${reportTextValue(r.name)}</td><td>${reportTextValue(r.status || r.thesis)}</td><td class="c">${(r.status || r.thesis) === "Ongoing" ? "NA" : reportTextValue(r.date)}</td><td class="c">${(r.degree || r.name || r.status || r.thesis || r.score) ? researchGuidanceScore(r).toFixed(1) : "&nbsp;"}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="5" class="c b">Total (Max 20)</td><td class="c">${researchScore > 0 ? researchScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>`}
-
-    <h3>B6. Consultancy, Testing &amp; Training &nbsp;(Max 20)</h3>
-    <table>
-      <tr><th>SN</th><th>Title of Proposal</th><th>Duration</th><th>Funding Agency</th><th>Grant Amount Requested</th><th>Self Score</th></tr>
-      ${proposals.map((p, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(p.title)}</td><td class="c">${reportTextValue(p.duration)}</td><td>${reportTextValue(p.agency)}</td><td class="c">${reportTextValue(p.amount)}</td><td class="c">${reportTextValue(p.score)}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="5" class="c b">Total (Max 20)</td><td class="c">${proposalScore > 0 ? proposalScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    <h3>B7. Conference / FDP Contributions - Organised &nbsp;(Max 20)</h3>
-    <table>
-      <tr><th>SN</th><th>Title / Session</th><th>Type</th><th>Organization</th><th>Level</th><th>Self Score</th></tr>
-      ${confs.map((c, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(c.title)}</td><td>${reportTextValue(c.type)}</td><td>${reportTextValue(c.org)}</td><td>${reportTextValue(c.level)}</td><td class="c">${reportTextValue(c.score)}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="5" class="c b">Total (Max 20)</td><td class="c">${confScore > 0 ? confScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    <h3>B8. Conference / FDP / Industry Training Attended &nbsp;(Max 20)</h3>
-    <table>
-      <tr><th>SN</th><th>Program</th><th>From</th><th>To</th><th>Organized By</th><th>Self Score</th></tr>
-      ${fdps.map((f, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(f.program)}</td><td class="c">${reportTextValue(f.fromDate)}</td><td class="c">${reportTextValue(f.toDate)}</td><td>${reportTextValue(f.org)}</td><td class="c">${reportTextValue(clampScore(f.score, SCORE_LIMITS.fdpRow))}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="5" class="c b">FDP / Workshops Total</td><td class="c">${fdpScore > 0 ? fdpScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    <h3>Industrial Training</h3>
-    <table>
-      <tr><th>SN</th><th>Company / Industry</th><th>Duration</th><th>Nature of Training</th><th>Self Score</th></tr>
-      ${training.map((t, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(t.company)}</td><td class="c">${reportTextValue(t.duration)}</td><td>${reportTextValue(t.nature)}</td><td class="c">${reportTextValue(clampScore(t.score, SCORE_LIMITS.fdpRow))}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="4" class="c b">Combined B8 Total (Max 20)</td><td class="c">${b8Score > 0 ? b8Score.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    <h3>B9. Research Awards, Fellowships &amp; Citations &nbsp;(Max 20)</h3>
-    <table>
-      <tr><th>SN</th><th>Title of Award</th><th>Date</th><th>Awarding Agency</th><th>Level</th><th>Self Score</th></tr>
-      ${awards.map((a, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(a.title)}</td><td class="c">${reportTextValue(a.date)}</td><td>${reportTextValue(a.agency)}</td><td>${reportTextValue(a.level)}</td><td class="c">${reportTextValue(a.score)}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="5" class="c b">Total (Max 20)</td><td class="c">${awardScore > 0 ? awardScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    <h3>B10. Innovation, Start-ups &amp; Technology Transfer &nbsp;(Max 20)</h3>
-    <table>
-      <tr><th>SN</th><th>Details of Product</th><th>Used by Students / Commercialized</th><th>Self Score</th></tr>
-      ${products.map((p, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(p.details)}</td><td>${reportTextValue(p.usage)}</td><td class="c">${reportTextValue(p.score)}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="3" class="c b">Total (Max 20)</td><td class="c">${productScore > 0 ? productScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    <h3>B11. ICT Content, MOOCs &amp; E-Learning &nbsp;(Max 20)</h3>
-    <table>
-      <tr><th>SN</th><th>Title</th><th>Short Description</th><th>Type / Link</th><th>Quadrants</th><th>Self Score</th></tr>
-      ${ict.map((r, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(r.title)}</td><td>${reportTextValue(r.desc)}</td><td>${reportTextValue(r.type)}</td><td class="c">${reportTextValue(r.quad)}</td><td class="c">${reportTextValue(r.score)}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="5" class="c b">Total (Max 15)</td><td class="c">${ictScore > 0 ? ictScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    <div class="pb"></div>
-    <h3 style="background:#d9d9d9;padding:4px;text-align:center;font-size:13px">PART C - Administrative Role &amp; University Development Contribution</h3>
-
-    <h3>C1. Administration at University Level &nbsp;(Max 50)</h3>
-    <table>
-      <tr><th>SN</th><th>Activity / Responsibility</th><th>Duration Category</th><th>Period</th><th>Self Score</th></tr>
-      ${uniActs.map((u, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(u.activity)}</td><td>${reportTextValue(u.nature)}</td><td>${reportTextValue(u.period)}</td><td class="c">${reportTextValue(u.score)}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="4" class="c b">Total (Max 50)</td><td class="c">${uniScore > 0 ? uniScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    <h3>C2. Administration at School Level &nbsp;(Max 30)</h3>
-    <table>
-      <tr><th>SN</th><th>Activity / Responsibility</th><th>Duration Category</th><th>Period</th><th>Self Score</th></tr>
-      ${deptActs.map((d, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(d.activity)}</td><td>${reportTextValue(d.nature)}</td><td>${reportTextValue(d.period)}</td><td class="c">${reportTextValue(d.score)}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="4" class="c b">Total (Max 30)</td><td class="c">${deptScore > 0 ? deptScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    <h3>C3. Event Organisation &amp; Institutional Visibility &nbsp;(Max 20)</h3>
-    <table>
-      <tr><th>SN</th><th>Event / Contribution</th><th>Role</th><th>Date</th><th>Level</th><th>Self Score</th></tr>
-      ${eventRows.map((r, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(r.event)}</td><td>${reportTextValue(r.role)}</td><td class="c">${reportTextValue(r.date)}</td><td>${reportTextValue(r.level)}</td><td class="c">${reportTextValue(r.score)}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="5" class="c b">Total (Max 20)</td><td class="c">${eventScore > 0 ? eventScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    <h3>C4. Outreach, Extension &amp; Social Responsibility &nbsp;(Max 20)</h3>
-    ${`<table>
-      <tr><th>SN</th><th>Activity</th><th>Details</th><th>Date</th><th>Self Score</th></tr>
-      ${society.map((s, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(s.label)}</td><td>${reportTextValue(s.details)}</td><td class="c">${reportTextValue(s.date)}</td><td class="c">${reportTextValue(s.score)}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="4" class="c b">Total (Max 20)</td><td class="c">${societyScore > 0 ? societyScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>`}
-
-    <h3>C5. Industry Interaction &amp; Linkages &nbsp;(Max 10)</h3>
-    <table>
-      <tr><th>SN</th><th>Activity</th><th>Industry Partner</th><th>Date</th><th>Self Score</th></tr>
-      ${industry.map((ind, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(ind.activity || ind.name)}</td><td>${reportTextValue(ind.partner || ind.details)}</td><td class="c">${reportTextValue(ind.date)}</td><td class="c">${reportTextValue(ind.score)}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="4" class="c b">Total (Max 10)</td><td class="c">${industryScore > 0 ? industryScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    <h3>C6. Alumni Engagement &amp; Networking &nbsp;(Max 10)</h3>
-    <table>
-      <tr><th>SN</th><th>Activity</th><th>Details</th><th>Date</th><th>Self Score</th></tr>
-      ${alumniRows.map((r, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(r.activity)}</td><td>${reportTextValue(r.details)}</td><td class="c">${reportTextValue(r.date)}</td><td class="c">${reportTextValue(r.score)}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="4" class="c b">Total (Max 10)</td><td class="c">${alumniScore > 0 ? alumniScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    <h3>C7. Student Placement Mentoring &amp; Career Development &nbsp;(Max 20)</h3>
-    <table>
-      <tr><th>SN</th><th>Activity Type</th><th>Student / Company Name</th><th>Date</th><th>Self Score</th></tr>
-      ${placementRows.map((r, i) => `<tr><td class="c">${i + 1}</td><td>${reportTextValue(r.activityType)}</td><td>${reportTextValue(r.name)}</td><td class="c">${reportTextValue(r.date)}</td><td class="c">${reportTextValue(r.score)}</td></tr>`).join('')}
-      <tr class="tr"><td colspan="4" class="c b">Total (Max 20)</td><td class="c">${placementScore > 0 ? placementScore.toFixed(1) : "&nbsp;"}</td></tr>
-    </table>
-
-    <div class="pb"></div>
-    <h3 style="text-align:center;font-size:13px">SUMMARY OF SELF SCORES - AY ${reportTextValue(info.ay)}</h3>
-    <table class="st">
-      <tr><th>Sr.No.</th><th>Criteria</th><th>Max Score</th><th>Faculty Score</th></tr>
-      <tr><td colspan="4" class="b" style="background:#d9d9d9;text-align:center">Part A - Teaching Process</td></tr>
-      <tr><td class="c">A</td><td>Teaching &amp; Learning</td><td class="c">${effectivePartAMax}</td><td class="c">${partATotal > 0 ? partATotal.toFixed(1) : "&nbsp;"}</td></tr>
-      <tr class="tr"><td colspan="2" class="c b">Part A Total</td><td class="c b">${effectivePartAMax}</td><td class="c b">${partATotal > 0 ? partATotal.toFixed(1) : "&nbsp;"}</td></tr>
-      <tr class="tr"><td colspan="2" class="c b">Part A Marks Obtained (%)</td><td colspan="2" class="c b">${partATotal > 0 ? `${partAMarksPercentage}%` : "&nbsp;"}</td></tr>
-      <tr><td colspan="4" class="b" style="background:#d9d9d9;text-align:center">Part B - Research &amp; Innovation</td></tr>
-      <tr><td class="c">B</td><td>Research &amp; Innovation</td><td class="c">${effectivePartBMax}</td><td class="c">${partBTotal > 0 ? partBTotal.toFixed(1) : "&nbsp;"}</td></tr>
-      <tr class="tr"><td colspan="2" class="c b">Part B Total</td><td class="c b">${effectivePartBMax}</td><td class="c b">${partBTotal > 0 ? partBTotal.toFixed(1) : "&nbsp;"}</td></tr>
-      <tr class="tr"><td colspan="2" class="c b">Part B Marks Obtained (%)</td><td colspan="2" class="c b">${partBTotal > 0 ? `${partBMarksPercentage}%` : "&nbsp;"}</td></tr>
-      <tr><td colspan="4" class="b" style="background:#d9d9d9;text-align:center">Part C - Administrative Role &amp; University Development Contribution</td></tr>
-      <tr><td class="c">C</td><td>Administrative Contribution</td><td class="c">${PART_C_MAX}</td><td class="c">${partCTotal > 0 ? partCTotal.toFixed(1) : "&nbsp;"}</td></tr>
-      <tr style="background:#bfbfbf;font-weight:bold;font-size:13px"><td colspan="2" class="c">Grand Total (Part A + Part B + Part C + Part D)</td><td class="c">${effectiveGrandMax}</td><td class="c">${grandTotal > 0 ? grandTotal.toFixed(1) : "&nbsp;"}</td></tr>
-      <tr style="background:#bfbfbf;font-weight:bold;font-size:13px"><td colspan="2" class="c">Marks Obtained (%)</td><td colspan="2" class="c">${grandTotal > 0 ? `${totalMarksPercentage}%` : "&nbsp;"}</td></tr>
-    </table>
-
-    ${String(summaryOtherInfo ?? "").trim() ? `
-    <h3>Any other information not covered above</h3>
-    <div class="remarks">${reportTextValue(summaryOtherInfo)}</div>
-    ` : ""}
-
-    <h3 style="text-align:center;font-size:16px;background:#d9d9d9;padding:8px;margin:18px 0 10px">DECLARATION BY FACULTY</h3>
-    <table class="declaration-table" style="border:none;margin-bottom:14px">
-      <tr>
-        <td style="border:none;vertical-align:top;width:36px;font-size:22px">&#10003;</td>
-        <td style="border:none;line-height:1.75;font-size:13px">
-          I, <strong>${info.name || "________________________"}</strong>, hereby declare that all the information
-          furnished in this Self-Appraisal Report is true, complete, and correct to the best of my knowledge and belief.
-          I understand that in the event of any information being found false or incorrect, I shall be solely responsible
-          for the consequences thereof and shall be liable for any disciplinary action as deemed fit by the University authorities.
-        </td>
-      </tr>
-    </table>
-    <table class="declaration-table" style="border:none;margin-bottom:20px">
-      <tr>
-        <td style="border:none;width:50%;font-size:12px;line-height:1.45">
-          <div style="border-bottom:1px solid #000;min-height:36px;margin-bottom:4px">&nbsp;</div>
-          <div><strong>Signature of Faculty</strong></div>
-          <div style="margin-top:6px"><strong>Name:</strong> ${info.name || "&nbsp;"}</div>
-          <div style="margin-top:4px"><strong>Date of Submission:</strong> ${workflowDeclaration?.submitted_at ? new Date(workflowDeclaration.submitted_at).toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" }) : "&nbsp;"}</div>
-        </td>
-        <td style="border:none;width:50%">&nbsp;</td>
-      </tr>
-    </table>
-    ${workflowReviews.length ? `
-    <h3 style="text-align:center;font-size:13px;background:#d9d9d9;padding:4px;margin:0 0 8px">REVIEWERS' ACKNOWLEDGEMENT</h3>
-    <p style="font-size:10px;margin:0 0 10px">The following authorities acknowledge that they have reviewed the details submitted by the faculty and confirm the accuracy of scores assigned.</p>
-    <table>
-      <thead><tr><th style="width:30%">Reviewer Role</th><th style="width:40%">Name &amp; Signature</th><th style="width:15%">Date</th><th style="width:15%">Stamp</th></tr></thead>
-      <tbody>
-        ${workflowReviews.map((rev) => `<tr>
-          <td><strong>${roleLabel(rev.reviewer_role)}</strong></td>
-          <td style="border-bottom:1px solid #000">${rev.reviewer_name || "&nbsp;"}</td>
-          <td style="border-bottom:1px solid #000">${rev.reviewed_at ? new Date(rev.reviewed_at).toLocaleDateString("en-IN") : "&nbsp;"}</td>
-          <td style="border-bottom:1px solid #000">&nbsp;</td>
-        </tr>`).join("")}
-      </tbody>
-    </table>` : ""}
-
-  <script>
-    window.addEventListener('load', function(){
-      const images = Array.from(document.images || []);
-      Promise.all(images.map(function(img){
-        if (img.complete) return Promise.resolve();
-        return new Promise(function(resolve){
-          img.onload = resolve;
-          img.onerror = resolve;
-          setTimeout(resolve, 800);
-        });
-      })).then(function(){
-        setTimeout(function(){ window.focus(); window.print(); }, 120);
-      });
-    });
-  </script>
-  </body>
-  </html>`;
-
-    win.document.write(html);
-    win.document.close();
-  };
-  const workflowRejected = hasActiveRejection(workflowDeclaration, workflowReviews);
-  const headerSchoolName = getSchoolByValue(info.school)?.name || info.school || "";
-
-  const academicYearOptions = availableCyclesState.length
-    ? availableCyclesState
-    : [{ academic_year: info.ay || resolvedAcademicYear, is_open: true }];
-  const documentKeys = Object.keys(docs || {}).filter((key) => {
-    const files = Array.isArray(docs?.[key]) ? docs[key] : docs?.[key] ? [docs[key]] : [];
-    return files.length > 0;
-  }).sort();
-  const documentCount = documentKeys.reduce((total, key) => {
-    const files = Array.isArray(docs?.[key]) ? docs[key] : docs?.[key] ? [docs[key]] : [];
-    return total + files.length;
-  }, 0);
-  const allDocumentFiles = documentKeys.flatMap((key) => {
-    const files = Array.isArray(docs?.[key]) ? docs[key] : docs?.[key] ? [docs[key]] : [];
-    return files.map((file, index) => ({ file, key, index }));
-  });
-  const handleDownloadAttachments = async () => {
-    if (!allDocumentFiles.length) {
-      alert("No attachments found for this academic year.");
-      return;
-    }
-    setAttachmentDownloading(true);
-    try {
-      const usedNames = new Set();
-      const entries = [];
-      for (const item of allDocumentFiles) {
-        entries.push({
-          name: attachmentFileName(item.file, `${item.key}-${item.index + 1}`, usedNames),
-          blob: await fetchAttachmentBlob(item.file),
-        });
-      }
-      const zipBlob = await createZipBlob(entries);
-      downloadBlob(zipBlob, `attachments-${String(info.ay || "academic-year").replace(/[^a-z0-9-]/gi, "_")}.zip`);
-    } catch (error) {
-      console.error("Could not download attachments:", error);
-      alert("Could not download all attachments. Please try again.");
-    } finally {
-      setAttachmentDownloading(false);
-    }
-  };
-  const handleAcademicYearChange = (newAcademicYear) => {
-    setInfo((previousInfo) => profileSafeInfoForYear(previousInfo, newAcademicYear, defaultDesignation));
-    setDocs({});
-    setLegacyReportTotals(null);
-    setActiveAcademicYear(newAcademicYear);
-    window.dispatchEvent(new CustomEvent("academicYearChanged", {
-      detail: { academicYear: newAcademicYear },
-    }));
   };
 
   return (
     <div className="appraisal-form-shell" style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-      {showSectionSelector && !showClosedReportOnly && !isLegacyTwoPartYear && (
-      <div className="appraisal-section-selector" style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 20, padding: "16px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, flexWrap: "wrap", boxShadow: "0 12px 30px rgba(17,24,39,0.06)" }}>
-        <div style={{ fontSize: 13, color: "#6b7280", fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.6 }}>My Appraisal Section</div>
-        <select
-          value={hodAppraisalTab}
-          onChange={(e) => handleMyAppraisalSectionChange(e.target.value)}
-          style={{ minWidth: 220, height: 44, border: "1px solid #e5e7eb", borderRadius: 12, padding: "0 14px", fontSize: 14, fontFamily: "inherit", color: "#111827", background: "#fff", outline: "none", fontWeight: 700 }}
-        >
-          {sectionOptions.map(([value, label]) => (
-            <option key={value} value={value} disabled={!isMyAppraisalSectionOpen(value)}>{label}</option>
-          ))}
-        </select>
-      </div>
+      {/* Section Selector */}
+      {showSectionSelector && (
+        <div className="appraisal-section-selector" style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 20, padding: "16px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, flexWrap: "wrap", boxShadow: "0 12px 30px rgba(17,24,39,0.06)" }}>
+          <div style={{ fontSize: 13, color: "#6b7280", fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.6 }}>My Appraisal Section</div>
+          <select
+            value={hodAppraisalTab}
+            onChange={(e) => handleMyAppraisalSectionChange(e.target.value)}
+            style={{ minWidth: 280, height: 44, border: "1px solid #e5e7eb", borderRadius: 12, padding: "0 14px", fontSize: 14, fontFamily: "inherit", color: "#111827", background: "#fff", outline: "none", fontWeight: 700 }}
+          >
+            {sectionOptions.map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
+        </div>
       )}
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            <div className="appraisal-page-header" style={{ background: "#fff", borderRadius: 14, padding: "16px 24px", boxShadow: "0 10px 28px rgba(17,24,39,0.06)", border: "1px solid #e5e7eb", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 18, flexWrap: "wrap" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 16, minWidth: 260 }}>
-              <AppraisalHeaderImage logo="dypiu" height={78} />
-              <div>
-                <h2 style={{ margin: 0, fontSize: 26, fontWeight: 900, color: "#111827", letterSpacing: 0, lineHeight: 1.05 }}>My Appraisal Form</h2>
-                {headerSchoolName && (
-                  <div style={{ marginTop: 6, color: "#4b5563", fontSize: 13, fontWeight: 800, lineHeight: 1.25 }}>{headerSchoolName}</div>
-                )}
-                <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 10, fontSize: 13, color: "#6b7280", fontWeight: 700, flexWrap: "wrap" }}>
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "#111827", fontWeight: 800 }}>
-                    <span style={{ width: 24, height: 24, borderRadius: "50%", display: "inline-flex", alignItems: "center", justifyContent: "center", background: "#ede9fe", color: "#6d28d9", border: "1px solid #ddd6fe" }}>
-                      <InlineSvgIcon paths={SUMMARY_ICONS.user} size={14} />
-                    </span>
-                    <span>{info.name || titleNameFallback}</span>
-                  </span>
-                  <span aria-hidden="true" style={{ width: 1, height: 20, background: "#cbd5e1", display: "inline-block" }} />
-                  <span>Academic Year:</span>
-                  <select
-                    value={info.ay}
-                    onChange={(event) => handleAcademicYearChange(event.target.value)}
-                    className="appraisal-year-select"
-                    style={{ height: 36, minWidth: 176, border: "1px solid #d1d5db", borderRadius: 9, padding: "0 12px", fontSize: 13, fontFamily: "inherit", color: "#111827", background: "#fff", outline: "none", fontWeight: 800, boxShadow: "0 1px 2px rgba(15,23,42,0.04)" }}
-                  >
-                    {academicYearOptions.map((cycle) => (
-                      <option key={cycle.academic_year} value={cycle.academic_year}>
-                        {cycle.academic_year} {cycle.is_open ? "(Active)" : "(Closed / Read-Only)"}
-                      </option>
-                    ))}
+
+      {/* Header Card */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div className="appraisal-page-header" style={{ background: "#fff", borderRadius: 14, padding: "16px 24px", boxShadow: "0 10px 28px rgba(17,24,39,0.06)", border: "1px solid #e5e7eb", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 18, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 16, minWidth: 260 }}>
+            <AppraisalHeaderImage logo="dypiu" height={78} />
+            <div>
+              <h2 style={{ margin: 0, fontSize: 24, fontWeight: 900, color: "#111827", letterSpacing: 0, lineHeight: 1.1 }}>Annual Faculty Self Appraisal Report (SAR)</h2>
+              <div style={{ marginTop: 4, color: "#4b5563", fontSize: 13, fontWeight: 700 }}>D. Y. Patil Agriculture and Technical University, Talsande, Kolhapur</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8, fontSize: 13, color: "#6b7280", fontWeight: 700, flexWrap: "wrap" }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "#111827", fontWeight: 800 }}>
+                  <InlineSvgIcon paths={SUMMARY_ICONS.user} size={14} />
+                  <span>{info.name || titleNameFallback}</span>
+                </span>
+                <span aria-hidden="true" style={{ width: 1, height: 16, background: "#cbd5e1", display: "inline-block" }} />
+                <span>Academic Year: <strong>{info.ay}</strong></span>
+              </div>
+            </div>
+          </div>
+          <AppraisalHeaderImage logo="iqas" height={78} />
+        </div>
+
+        {/* Dummy Data Button & Total Score Banner */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, background: "#fff", padding: "12px 20px", borderRadius: 12, border: "1px solid #e5e7eb", boxShadow: "0 4px 12px rgba(0,0,0,0.03)" }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: "#1e1b4b" }}>
+            Total Self Appraisal Score: <span style={{ color: "#4f46e5", fontSize: 18, fontWeight: 900 }}>{grandTotal.toFixed(1)} / 300 Marks</span>
+          </div>
+          <button
+            type="button"
+            onClick={fillStandardDummyData}
+            style={{ padding: "8px 16px", background: "#0f766e", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 800, fontSize: 13, fontFamily: "inherit", boxShadow: "0 4px 12px rgba(15,118,110,0.2)" }}
+          >
+            Fill Dummy Test Data
+          </button>
+        </div>
+
+        {/* MAIN TABS CONTENT */}
+        <div>
+          {/* PART A: GENERAL INFORMATION */}
+          {hodAppraisalTab === "partA" && (
+            <SC title="PART A: General Information and Academic Background" accent="#4f46e5" hideGuideline>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
+                <div>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#374151", marginBottom: 4 }}>Full Name (in Block Letters)</label>
+                  <TI val={info.name} onChange={(v) => setInfo((p) => ({ ...p, name: v }))} placeholder="Full Name" />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#374151", marginBottom: 4 }}>Department</label>
+                  <TI val={info.department} onChange={(v) => setInfo((p) => ({ ...p, department: v }))} placeholder="Department" />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#374151", marginBottom: 4 }}>Current Designation</label>
+                  <TI val={info.designation} onChange={(v) => setInfo((p) => ({ ...p, designation: v }))} placeholder="Current Designation" />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#374151", marginBottom: 4 }}>Highest Qualification</label>
+                  <TI val={info.highestQualification} onChange={(v) => setInfo((p) => ({ ...p, highestQualification: v }))} placeholder="e.g. Ph.D. / M.Tech" />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#374151", marginBottom: 4 }}>Qualification Improvement during the year (if any)</label>
+                  <TI val={info.qualImprovement} onChange={(v) => setInfo((p) => ({ ...p, qualImprovement: v }))} placeholder="e.g. Completed Ph.D. / NPTEL" />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#374151", marginBottom: 4 }}>Date of Birth</label>
+                  <TI val={info.dob} onChange={(v) => setInfo((p) => ({ ...p, dob: v }))} placeholder="DD/MM/YYYY" />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#374151", marginBottom: 4 }}>Gender</label>
+                  <select value={info.gender} onChange={(e) => setInfo((p) => ({ ...p, gender: e.target.value }))} style={{ width: "100%", height: 36, border: "1px solid #cbd5e1", borderRadius: 6, padding: "0 10px", fontSize: 13 }}>
+                    <option value="">Select Gender</option>
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                    <option value="Other">Other</option>
                   </select>
                 </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#374151", marginBottom: 4 }}>Marital Status</label>
+                  <TI val={info.maritalStatus} onChange={(v) => setInfo((p) => ({ ...p, maritalStatus: v }))} placeholder="Married / Single" />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#374151", marginBottom: 4 }}>Nationality</label>
+                  <TI val={info.nationality} onChange={(v) => setInfo((p) => ({ ...p, nationality: v }))} placeholder="Indian" />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#374151", marginBottom: 4 }}>Mobile No</label>
+                  <TI val={info.mobile} onChange={(v) => setInfo((p) => ({ ...p, mobile: v }))} placeholder="Mobile Number" />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#374151", marginBottom: 4 }}>Email ID</label>
+                  <TI val={info.email} onChange={(v) => setInfo((p) => ({ ...p, email: v }))} placeholder="Email ID" />
+                </div>
+                <div style={{ gridColumn: "1 / -1" }}>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#374151", marginBottom: 4 }}>Address for Correspondence (with Pin code)</label>
+                  <TI val={info.correspondenceAddress} onChange={(v) => setInfo((p) => ({ ...p, correspondenceAddress: v }))} placeholder="Correspondence Address" />
+                </div>
+                <div style={{ gridColumn: "1 / -1" }}>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#374151", marginBottom: 4 }}>Permanent Address (with Pin code)</label>
+                  <TI val={info.permanentAddress} onChange={(v) => setInfo((p) => ({ ...p, permanentAddress: v }))} placeholder="Permanent Address" />
+                </div>
               </div>
+              <SectionNavFooter nextSection="sec1" onNavigate={handleMyAppraisalSectionChange} />
+            </SC>
+          )}
+
+          {/* SECTION 1: TEACHING-LEARNING PROCESS */}
+          {hodAppraisalTab === "sec1" && (
+            <SC title="1. Teaching-Learning Process (50 Marks)" accent="#4f46e5" scoreBadge={`${sec1Total.toFixed(1)} / 50`} hideGuideline>
+              <SubsectionTitle>A) Teaching Workload (Core Competency) (40 Marks)</SubsectionTitle>
+              <div style={{ background: "#f8fafc", padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 12, color: "#475569" }}>
+                <strong>Grading Criteria (Per Sem, Max 20 Marks):</strong> 85% & above = 20 Marks | 75%-84.99% = 15 Marks | 60%-74.99% = 12 Marks | 50%-59.99% = 10 Marks | Below 50% = 0 Marks.
               </div>
-              <AppraisalHeaderImage logo="iqas" height={78} />
-            </div>
-            <div className="appraisal-status-grid" style={{ display: "grid", gridTemplateColumns: isSelectedCycleClosed || isLegacyTwoPartYear ? "1fr" : "minmax(0, 1fr) 316px", gap: 12, alignItems: "stretch" }}>
-              <WorkflowStatusTracker
-                declaration={workflowDeclaration}
-                reviews={workflowReviews}
-                profile={profileFromsessionStorage()}
-              />
-              {!isSelectedCycleClosed && !isLegacyTwoPartYear && (
-                <div className="appraisal-progress-card" style={{ background: "#fff", borderRadius: 14, padding: "18px 22px", boxShadow: "0 10px 28px rgba(17,24,39,0.06)", border: "1px solid #e5e7eb", display: "flex", flexDirection: "column", justifyContent: "center", gap: 10 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
-                    <div style={{ fontSize: 14, color: "#374151", fontWeight: 800 }}>Overall Progress</div>
-                    <div style={{ fontSize: 22, color: "#111827", fontWeight: 950, lineHeight: 1 }}>{overallProgress}%</div>
-                  </div>
-                  <div aria-label={`Overall progress ${overallProgress}%`} style={{ height: 8, borderRadius: 999, background: "#e5e7eb", overflow: "hidden" }}>
-                    <div style={{ width: `${overallProgress}%`, height: "100%", borderRadius: 999, background: "linear-gradient(90deg,#06b6d4,#10b981)", transition: "width 300ms ease" }} />
-                  </div>
-                  <div style={{ fontSize: 14, color: "#6b7280", fontWeight: 600 }}>{grandTotal.toFixed(1)} / {effectiveGrandMax} Marks</div>
-                  <div aria-label="Part-wise progress" style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 5, borderTop: "1px solid #e5e7eb", paddingTop: 8 }}>
-                    {partWiseProgressRows.map(([label, score, max], index) => {
-                      const partColor = ["#4f46e5", "#0891b2", "#059669", "#dc2626"][index] || "#4f46e5";
-                      const partLetter = label.replace("Part ", "");
+
+              {/* Sem I */}
+              <div style={{ marginBottom: 20 }}>
+                <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: "#1e1b4b" }}>Sem I (20 Marks)</h4>
+                <table style={T}>
+                  <thead>
+                    <tr>
+                      <th style={TH}>Sr. No.</th>
+                      <th style={TH}>Class</th>
+                      <th style={TH}>Subject Name</th>
+                      <th style={TH}>Planned</th>
+                      <th style={TH}>Conducted</th>
+                      <th style={TH}>% Conducted</th>
+                      <th style={TH}>Self Score</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sem1Workload.map((r, i) => {
+                      const p = Number(r.planned) || 0;
+                      const c = Number(r.conducted) || 0;
+                      const pct = p > 0 ? ((c / p) * 100).toFixed(1) : "0.0";
                       return (
-                      <div key={label} title={`${label}: ${score.toFixed(1)} / ${max}`} style={{ minWidth: 0, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 6, padding: "5px 4px", textAlign: "center" }}>
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 3, marginBottom: 1 }}>
-                          <span style={{ width: 14, height: 14, borderRadius: 999, display: "inline-flex", alignItems: "center", justifyContent: "center", background: `${partColor}14`, border: `1px solid ${partColor}33`, color: partColor, fontSize: 9, fontWeight: 950 }}>{partLetter}</span>
-                        </div>
-                        <div style={{ fontSize: 10, color: "#0f172a", fontWeight: 900, whiteSpace: "nowrap" }}>{score.toFixed(0)}/{max}</div>
-                      </div>
+                        <tr key={i}>
+                          <td style={TDC}>{i + 1}</td>
+                          <td style={TD}><TI val={r.class} onChange={(v) => setSem1Workload((p) => p.map((row, j) => j === i ? { ...row, class: v } : row))} placeholder="e.g. B.Tech CSE" /></td>
+                          <td style={TD}><TI val={r.subject} onChange={(v) => setSem1Workload((p) => p.map((row, j) => j === i ? { ...row, subject: v } : row))} placeholder="Subject Name" /></td>
+                          <td style={TDC}><TI val={r.planned} onChange={(v) => setSem1Workload((p) => p.map((row, j) => j === i ? { ...row, planned: v } : row))} center numeric placeholder="Planned" /></td>
+                          <td style={TDC}><TI val={r.conducted} onChange={(v) => setSem1Workload((p) => p.map((row, j) => j === i ? { ...row, conducted: v } : row))} center numeric placeholder="Conducted" /></td>
+                          <td style={{ ...TDC, fontWeight: 700 }}>{pct}%</td>
+                          <td style={TDS}><TI val={r.score} onChange={(v) => setSem1Workload((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={20} placeholder="0-20" /></td>
+                        </tr>
                       );
                     })}
-                  </div>
-                </div>
-              )}
-            </div>
-            <RejectionNotice
-              declaration={workflowDeclaration}
-              reviews={workflowReviews}
-              status={workflowDeclaration?.status}
-              alertOnceKey={`${sessionStorage.getItem("username") || ""}:${info.ay || ""}:${workflowDeclaration?.status || ""}`}
-            />
-            {formLocked && (
-              <div style={{ background: appraisalWindowLockMessage || isSelectedCycleClosed ? "#fffbeb" : workflowRejected ? "#fef2f2" : "#ecfdf5", border: `1px solid ${appraisalWindowLockMessage || isSelectedCycleClosed ? "#fde68a" : workflowRejected ? "#fecaca" : "#bbf7d0"}`, color: appraisalWindowLockMessage || isSelectedCycleClosed ? "#92400e" : workflowRejected ? "#991b1b" : "#166534", borderRadius: 9, padding: "11px 14px", fontSize: 12, fontWeight: 750, display: "flex", alignItems: "center", gap: 10 }}>
-                <span aria-hidden="true" style={{ width: 24, height: 24, borderRadius: "50%", background: appraisalWindowLockMessage || isSelectedCycleClosed ? "#fef3c7" : workflowRejected ? "#fee2e2" : "#dcfce7", display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 14, fontWeight: 950 }}>{appraisalWindowLockMessage || isSelectedCycleClosed ? "!" : "i"}</span>
-                <span>
-                  {appraisalWindowLockMessage
-                    ? appraisalWindowLockMessage
-                    : workflowRejected
-                    ? "This appraisal was rejected. Review the approval status in the tracker above."
-                    : isSelectedCycleClosed
-                      ? closedAppraisalCycleMessage
-                      : "Submitted and locked for review. Your saved data is visible here, but editing is disabled while authorities review it."}
-                </span>
+                  </tbody>
+                </table>
+                <RowBtns
+                  onAdd={() => setSem1Workload((p) => [...p, { class: "", subject: "", planned: "", conducted: "", score: "" }])}
+                  onDel={() => setSem1Workload((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                  canDel={sem1Workload.length > 1}
+                />
               </div>
-            )}
 
-            {showClosedReportOnly ? (
-              <SC title="Closed Appraisal Report" accent="#4c1d95">
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
-                  {[
-                    ["Academic Year", info.ay || "-"],
-                    ["Submitted Score", `${grandTotal.toFixed(1)} / ${effectiveGrandMax}`],
-                    ["Documents", `${documentCount} file${documentCount === 1 ? "" : "s"}`],
-                  ].map(([label, value]) => (
-                    <div key={label} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: "12px 14px", background: "#f8fafc" }}>
-                      <div style={{ fontSize: 11, color: "#64748b", fontWeight: 900, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</div>
-                      <div style={{ marginTop: 5, fontSize: 16, color: "#111827", fontWeight: 900 }}>{value}</div>
-                    </div>
+              {/* Sem II */}
+              <div style={{ marginBottom: 20 }}>
+                <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: "#1e1b4b" }}>Sem II (20 Marks)</h4>
+                <table style={T}>
+                  <thead>
+                    <tr>
+                      <th style={TH}>Sr. No.</th>
+                      <th style={TH}>Class</th>
+                      <th style={TH}>Subject Name</th>
+                      <th style={TH}>Planned</th>
+                      <th style={TH}>Conducted</th>
+                      <th style={TH}>% Conducted</th>
+                      <th style={TH}>Self Score</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sem2Workload.map((r, i) => {
+                      const p = Number(r.planned) || 0;
+                      const c = Number(r.conducted) || 0;
+                      const pct = p > 0 ? ((c / p) * 100).toFixed(1) : "0.0";
+                      return (
+                        <tr key={i}>
+                          <td style={TDC}>{i + 1}</td>
+                          <td style={TD}><TI val={r.class} onChange={(v) => setSem2Workload((p) => p.map((row, j) => j === i ? { ...row, class: v } : row))} placeholder="e.g. B.Tech CSE" /></td>
+                          <td style={TD}><TI val={r.subject} onChange={(v) => setSem2Workload((p) => p.map((row, j) => j === i ? { ...row, subject: v } : row))} placeholder="Subject Name" /></td>
+                          <td style={TDC}><TI val={r.planned} onChange={(v) => setSem2Workload((p) => p.map((row, j) => j === i ? { ...row, planned: v } : row))} center numeric placeholder="Planned" /></td>
+                          <td style={TDC}><TI val={r.conducted} onChange={(v) => setSem2Workload((p) => p.map((row, j) => j === i ? { ...row, conducted: v } : row))} center numeric placeholder="Conducted" /></td>
+                          <td style={{ ...TDC, fontWeight: 700 }}>{pct}%</td>
+                          <td style={TDS}><TI val={r.score} onChange={(v) => setSem2Workload((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={20} placeholder="0-20" /></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <RowBtns
+                  onAdd={() => setSem2Workload((p) => [...p, { class: "", subject: "", planned: "", conducted: "", score: "" }])}
+                  onDel={() => setSem2Workload((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                  canDel={sem2Workload.length > 1}
+                />
+              </div>
+
+              {/* B) Pedagogy */}
+              <SubsectionTitle>B) Teaching Pedagogy/ Practices (10 Marks)</SubsectionTitle>
+
+              {/* i) e-Content */}
+              <div style={{ marginBottom: 20 }}>
+                <h4 style={{ margin: "0 0 8px", fontSize: 13, fontWeight: 800, color: "#374151" }}>i) e-Content Development (06 Marks) (03 Marks each)</h4>
+                <table style={T}>
+                  <thead>
+                    <tr>
+                      <th style={TH}>Sr. No.</th>
+                      <th style={TH}>e-Content Developed in subject</th>
+                      <th style={TH}>Topic Name</th>
+                      <th style={TH}>Link</th>
+                      <th style={TH}>Self Score</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {eContentRows.map((r, i) => (
+                      <tr key={i}>
+                        <td style={TDC}>{i + 1}</td>
+                        <td style={TD}><TI val={r.subject} onChange={(v) => setEContentRows((p) => p.map((row, j) => j === i ? { ...row, subject: v } : row))} placeholder="Subject Name" /></td>
+                        <td style={TD}><TI val={r.topic} onChange={(v) => setEContentRows((p) => p.map((row, j) => j === i ? { ...row, topic: v } : row))} placeholder="Topic Name" /></td>
+                        <td style={TD}><TI val={r.link} onChange={(v) => setEContentRows((p) => p.map((row, j) => j === i ? { ...row, link: v } : row))} placeholder="URL / Link" /></td>
+                        <td style={TDS}><TI val={r.score} onChange={(v) => setEContentRows((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={3} placeholder="0-3" /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <RowBtns
+                  onAdd={() => setEContentRows((p) => [...p, { subject: "", topic: "", link: "", score: "" }])}
+                  onDel={() => setEContentRows((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                  canDel={eContentRows.length > 1}
+                />
+              </div>
+
+              {/* ii) Innovation */}
+              <div>
+                <h4 style={{ margin: "0 0 8px", fontSize: 13, fontWeight: 800, color: "#374151" }}>ii) Innovation in Teaching (04 Marks)</h4>
+                <table style={T}>
+                  <thead>
+                    <tr>
+                      <th style={TH}>Sr. No.</th>
+                      <th style={TH}>Subject</th>
+                      <th style={TH}>Innovation</th>
+                      <th style={TH}>Brief Description</th>
+                      <th style={TH}>Self Score</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {innovRows.map((r, i) => (
+                      <tr key={i}>
+                        <td style={TDC}>{i + 1}</td>
+                        <td style={TD}><TI val={r.subject} onChange={(v) => setInnovRows((p) => p.map((row, j) => j === i ? { ...row, subject: v } : row))} placeholder="Subject" /></td>
+                        <td style={TD}><TI val={r.innovation} onChange={(v) => setInnovRows((p) => p.map((row, j) => j === i ? { ...row, innovation: v } : row))} placeholder="Innovation Name" /></td>
+                        <td style={TD}><TI val={r.description} onChange={(v) => setInnovRows((p) => p.map((row, j) => j === i ? { ...row, description: v } : row))} placeholder="Brief Description" /></td>
+                        <td style={TDS}><TI val={r.score} onChange={(v) => setInnovRows((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric placeholder="2" /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <RowBtns
+                  onAdd={() => setInnovRows((p) => [...p, { subject: "", innovation: "", description: "", score: "" }])}
+                  onDel={() => setInnovRows((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                  canDel={innovRows.length > 1}
+                />
+              </div>
+              <SectionNavFooter prevSection="partA" nextSection="sec2" onNavigate={handleMyAppraisalSectionChange} />
+            </SC>
+          )}
+
+          {/* SECTION 2: FEEDBACK FROM STUDENTS */}
+          {hodAppraisalTab === "sec2" && (
+            <SC title="2. Feedback from Students (10 Marks)" accent="#0891b2" scoreBadge={`${sec2Total.toFixed(1)} / 10`} hideGuideline>
+              <div style={{ background: "#f8fafc", padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 12, color: "#475569" }}>
+                <strong>Grading Criteria (Per Semester, Max 5 Marks):</strong> 85% & above = 5 | 75%-84.99% = 4 | 70%-74.99% = 3 | 65%-69.99% = 2 | 60%-64.99% = 1 | Below 60% = 0.
+              </div>
+
+              {/* Sem I */}
+              <div style={{ marginBottom: 20 }}>
+                <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: "#1e1b4b" }}>Sem I (05 Marks)</h4>
+                <table style={T}>
+                  <thead>
+                    <tr>
+                      <th style={TH}>Sr. No.</th>
+                      <th style={TH}>Subject Name</th>
+                      <th style={TH}>Feedback</th>
+                      <th style={TH}>Average Feedback</th>
+                      <th style={TH}>Self-Appraisal Score</th>
+                      <th style={TH}>HOD Score</th>
+                      <th style={TH}>Committee Score</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sem1Feedback.map((r, i) => (
+                      <tr key={i}>
+                        <td style={TDC}>{i + 1}</td>
+                        <td style={TD}><TI val={r.subject} onChange={(v) => setSem1Feedback((p) => p.map((row, j) => j === i ? { ...row, subject: v } : row))} placeholder="Subject Name" /></td>
+                        <td style={TDC}><TI val={r.feedbackPct} onChange={(v) => setSem1Feedback((p) => p.map((row, j) => j === i ? { ...row, feedbackPct: v } : row))} center numeric placeholder="Feedback %" /></td>
+                        {i === 0 && (
+                          <>
+                            <td style={TDC} rowSpan={sem1Feedback.length}>{sem1AvgFeedback || "-"}</td>
+                            <td style={TDS} rowSpan={sem1Feedback.length}>
+                              <TI val={sem1FeedbackSelfScore} onChange={setSem1FeedbackSelfScore} center numeric max={5} placeholder="0-5" />
+                            </td>
+                            <td style={TDC} rowSpan={sem1Feedback.length}><RO placeholder="-" center /></td>
+                            <td style={TDC} rowSpan={sem1Feedback.length}><RO placeholder="-" center /></td>
+                          </>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <RowBtns
+                  onAdd={() => setSem1Feedback((p) => [...p, { subject: "", feedbackPct: "" }])}
+                  onDel={() => setSem1Feedback((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                  canDel={sem1Feedback.length > 1}
+                />
+              </div>
+
+              {/* Sem II */}
+              <div>
+                <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: "#1e1b4b" }}>Sem II (05 Marks)</h4>
+                <table style={T}>
+                  <thead>
+                    <tr>
+                      <th style={TH}>Sr. No.</th>
+                      <th style={TH}>Subject Name</th>
+                      <th style={TH}>Feedback</th>
+                      <th style={TH}>Average Feedback</th>
+                      <th style={TH}>Self-Appraisal Score</th>
+                      <th style={TH}>HOD Score</th>
+                      <th style={TH}>Committee Score</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sem2Feedback.map((r, i) => (
+                      <tr key={i}>
+                        <td style={TDC}>{i + 1}</td>
+                        <td style={TD}><TI val={r.subject} onChange={(v) => setSem2Feedback((p) => p.map((row, j) => j === i ? { ...row, subject: v } : row))} placeholder="Subject Name" /></td>
+                        <td style={TDC}><TI val={r.feedbackPct} onChange={(v) => setSem2Feedback((p) => p.map((row, j) => j === i ? { ...row, feedbackPct: v } : row))} center numeric placeholder="Feedback %" /></td>
+                        {i === 0 && (
+                          <>
+                            <td style={TDC} rowSpan={sem2Feedback.length}>{sem2AvgFeedback || "-"}</td>
+                            <td style={TDS} rowSpan={sem2Feedback.length}>
+                              <TI val={sem2FeedbackSelfScore} onChange={setSem2FeedbackSelfScore} center numeric max={5} placeholder="0-5" />
+                            </td>
+                            <td style={TDC} rowSpan={sem2Feedback.length}><RO placeholder="-" center /></td>
+                            <td style={TDC} rowSpan={sem2Feedback.length}><RO placeholder="-" center /></td>
+                          </>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <RowBtns
+                  onAdd={() => setSem2Feedback((p) => [...p, { subject: "", feedbackPct: "" }])}
+                  onDel={() => setSem2Feedback((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                  canDel={sem2Feedback.length > 1}
+                />
+              </div>
+              <SectionNavFooter prevSection="sec1" nextSection="sec3" onNavigate={handleMyAppraisalSectionChange} />
+            </SC>
+          )}
+
+          {/* SECTION 3: ADMINISTRATIVE RESPONSIBILITIES */}
+          {hodAppraisalTab === "sec3" && (
+            <SC title="3. Administrative / Executive Responsibilities (20 Marks)" accent="#059669" scoreBadge={`${sec3Total.toFixed(1)} / 20`} hideGuideline>
+              <div style={{ background: "#f8fafc", padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 12, color: "#475569" }}>
+                <strong>Scoring Rules:</strong> Institute Level Coordinator/Head = 10 Marks | Institute Level Member = 03 Marks | Department Level Coordinator = 05 Marks | Department Level Member = 01 Mark. Total capped at 20 Marks.
+              </div>
+
+              {/* Institute Level */}
+              <div style={{ marginBottom: 20 }}>
+                <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: "#1e1b4b" }}>Institute Level</h4>
+                <table style={T}>
+                  <thead>
+                    <tr>
+                      <th style={TH}>Sr. No.</th>
+                      <th style={TH}>Name of Responsibility/Committee</th>
+                      <th style={TH}>Coordinator/Member</th>
+                      <th style={TH}>Self Score</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {instAdmin.map((r, i) => {
+                      const rowMax = r.role === "Institute Level Coordinator/Head" ? 10 : 3;
+                      return (
+                        <tr key={i}>
+                          <td style={TDC}>{i + 1}</td>
+                          <td style={TD}><TI val={r.name} onChange={(v) => setInstAdmin((p) => p.map((row, j) => j === i ? { ...row, name: v } : row))} placeholder="Committee / Responsibility Name" /></td>
+                          <td style={TD}>
+                            <select value={r.role} onChange={(e) => setInstAdmin((p) => p.map((row, j) => j === i ? { ...row, role: e.target.value } : row))} style={{ width: "100%", height: 32, border: "1px solid #cbd5e1", borderRadius: 4 }}>
+                              <option value="Institute Level Coordinator/Head">Institute Level Coordinator/Head (10 Marks)</option>
+                              <option value="Institute Level Member">Institute Level Member (03 Marks)</option>
+                            </select>
+                          </td>
+                          <td style={TDS}><TI val={r.score} onChange={(v) => setInstAdmin((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={rowMax} placeholder={`0-${rowMax}`} /></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <RowBtns
+                  onAdd={() => setInstAdmin((p) => [...p, { name: "", role: "Institute Level Coordinator/Head", score: "" }])}
+                  onDel={() => setInstAdmin((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                  canDel={instAdmin.length > 1}
+                />
+              </div>
+
+              {/* Department Level */}
+              <div>
+                <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: "#1e1b4b" }}>Department Level</h4>
+                <table style={T}>
+                  <thead>
+                    <tr>
+                      <th style={TH}>Sr. No.</th>
+                      <th style={TH}>Name of Responsibility/Committee</th>
+                      <th style={TH}>Coordinator/Member</th>
+                      <th style={TH}>Self Score</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {deptAdmin.map((r, i) => {
+                      const rowMax = r.role === "Department Level Coordinator" ? 5 : 1;
+                      return (
+                        <tr key={i}>
+                          <td style={TDC}>{i + 1}</td>
+                          <td style={TD}><TI val={r.name} onChange={(v) => setDeptAdmin((p) => p.map((row, j) => j === i ? { ...row, name: v } : row))} placeholder="Committee / Responsibility Name" /></td>
+                          <td style={TD}>
+                            <select value={r.role} onChange={(e) => setDeptAdmin((p) => p.map((row, j) => j === i ? { ...row, role: e.target.value } : row))} style={{ width: "100%", height: 32, border: "1px solid #cbd5e1", borderRadius: 4 }}>
+                              <option value="Department Level Coordinator">Department Level Coordinator (05 Marks)</option>
+                              <option value="Department Level Member">Department Level Member (01 Mark)</option>
+                            </select>
+                          </td>
+                          <td style={TDS}><TI val={r.score} onChange={(v) => setDeptAdmin((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={rowMax} placeholder={`0-${rowMax}`} /></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <RowBtns
+                  onAdd={() => setDeptAdmin((p) => [...p, { name: "", role: "Department Level Coordinator", score: "" }])}
+                  onDel={() => setDeptAdmin((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                  canDel={deptAdmin.length > 1}
+                />
+              </div>
+              <SectionNavFooter prevSection="sec2" nextSection="sec4" onNavigate={handleMyAppraisalSectionChange} />
+            </SC>
+          )}
+
+          {/* SECTION 4: EVALUATION AND ASSESSMENT */}
+          {hodAppraisalTab === "sec4" && (
+            <SC title="4. Evaluation and Assessment (20 Marks)" accent="#d97706" scoreBadge={`${sec4Total.toFixed(1)} / 20`} hideGuideline>
+              <SubsectionTitle>A) Result Analysis (14 Marks - 07 Marks per Sem)</SubsectionTitle>
+
+              {/* Sem I */}
+              <div style={{ marginBottom: 20 }}>
+                <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: "#1e1b4b" }}>Sem I (07 Marks)</h4>
+                <table style={T}>
+                  <thead>
+                    <tr>
+                      <th style={TH}>Sr. No.</th>
+                      <th style={TH}>Subject Name</th>
+                      <th style={TH}>Student Passing %</th>
+                      <th style={TH}>Previous Year Result</th>
+                      <th style={TH}>Difficulty Level</th>
+                      <th style={TH}>Self Score</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sem1Results.map((r, i) => (
+                      <tr key={i}>
+                        <td style={TDC}>{i + 1}</td>
+                        <td style={TD}><TI val={r.subject} onChange={(v) => setSem1Results((p) => p.map((row, j) => j === i ? { ...row, subject: v } : row))} placeholder="Subject Name" /></td>
+                        <td style={TDC}><TI val={r.passingPct} onChange={(v) => setSem1Results((p) => p.map((row, j) => j === i ? { ...row, passingPct: v } : row))} center numeric placeholder="Passing %" /></td>
+                        <td style={TDC}><TI val={r.prevYearResult} onChange={(v) => setSem1Results((p) => p.map((row, j) => j === i ? { ...row, prevYearResult: v } : row))} center numeric placeholder="Prev %" /></td>
+                        <td style={TD}>
+                          <select value={r.difficulty} onChange={(e) => setSem1Results((p) => p.map((row, j) => j === i ? { ...row, difficulty: e.target.value } : row))} style={{ width: "100%", height: 32, border: "1px solid #cbd5e1", borderRadius: 4 }}>
+                            <option value="Easy">Easy Subject</option>
+                            <option value="Medium">Medium Subject</option>
+                            <option value="High">High / Difficult Subject</option>
+                          </select>
+                        </td>
+                        <td style={TDS}><TI val={r.score} onChange={(v) => setSem1Results((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={7} placeholder="0-7" /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <RowBtns
+                  onAdd={() => setSem1Results((p) => [...p, { subject: "", passingPct: "", prevYearResult: "", difficulty: "Easy", score: "" }])}
+                  onDel={() => setSem1Results((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                  canDel={sem1Results.length > 1}
+                />
+              </div>
+
+              {/* Sem II */}
+              <div style={{ marginBottom: 20 }}>
+                <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: "#1e1b4b" }}>Sem II (07 Marks)</h4>
+                <table style={T}>
+                  <thead>
+                    <tr>
+                      <th style={TH}>Sr. No.</th>
+                      <th style={TH}>Subject Name</th>
+                      <th style={TH}>Student Passing %</th>
+                      <th style={TH}>Previous Year Result</th>
+                      <th style={TH}>Difficulty Level</th>
+                      <th style={TH}>Self Score</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sem2Results.map((r, i) => (
+                      <tr key={i}>
+                        <td style={TDC}>{i + 1}</td>
+                        <td style={TD}><TI val={r.subject} onChange={(v) => setSem2Results((p) => p.map((row, j) => j === i ? { ...row, subject: v } : row))} placeholder="Subject Name" /></td>
+                        <td style={TDC}><TI val={r.passingPct} onChange={(v) => setSem2Results((p) => p.map((row, j) => j === i ? { ...row, passingPct: v } : row))} center numeric placeholder="Passing %" /></td>
+                        <td style={TDC}><TI val={r.prevYearResult} onChange={(v) => setSem2Results((p) => p.map((row, j) => j === i ? { ...row, prevYearResult: v } : row))} center numeric placeholder="Prev %" /></td>
+                        <td style={TD}>
+                          <select value={r.difficulty} onChange={(e) => setSem2Results((p) => p.map((row, j) => j === i ? { ...row, difficulty: e.target.value } : row))} style={{ width: "100%", height: 32, border: "1px solid #cbd5e1", borderRadius: 4 }}>
+                            <option value="Easy">Easy Subject</option>
+                            <option value="Medium">Medium Subject</option>
+                            <option value="High">High / Difficult Subject</option>
+                          </select>
+                        </td>
+                        <td style={TDS}><TI val={r.score} onChange={(v) => setSem2Results((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={7} placeholder="0-7" /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <RowBtns
+                  onAdd={() => setSem2Results((p) => [...p, { subject: "", passingPct: "", prevYearResult: "", difficulty: "Easy", score: "" }])}
+                  onDel={() => setSem2Results((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                  canDel={sem2Results.length > 1}
+                />
+              </div>
+
+              {/* Exam Duties */}
+              <SubsectionTitle>B) Examination Duties (06 Marks - 02 Marks each)</SubsectionTitle>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Name of Duty</th>
+                    <th style={TH}>Details</th>
+                    <th style={TH}>Self Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {examDuties.map((r, i) => (
+                    <tr key={i}>
+                      <td style={TDC}>{i + 1}</td>
+                      <td style={{ ...TD, fontWeight: 700 }}>{r.duty}</td>
+                      <td style={TD}><TI val={r.details} onChange={(v) => setExamDuties((p) => p.map((row, j) => j === i ? { ...row, details: v } : row))} placeholder="Details of Duty" /></td>
+                      <td style={TDS}>
+                        <TI val={r.score} onChange={(v) => setExamDuties((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={2} placeholder="0-2" />
+                      </td>
+                    </tr>
                   ))}
+                </tbody>
+              </table>
+              <SectionNavFooter prevSection="sec3" nextSection="sec5" onNavigate={handleMyAppraisalSectionChange} />
+            </SC>
+          )}
+
+          {/* SECTION 5: EXTENSION AND OUTREACH */}
+          {hodAppraisalTab === "sec5" && (
+            <SC title="5. Extension and Outreach Activities (10 Marks)" accent="#dc2626" scoreBadge={`${sec5Total.toFixed(1)} / 10`} hideGuideline>
+              <div style={{ background: "#f8fafc", padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 12, color: "#475569" }}>
+                Participation in Field work, Field based activity, Industrial visit, Site visit, NSS/NCC, etc. (05 Marks each activity). Max 10 Marks.
+              </div>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Particular</th>
+                    <th style={TH}>Total hours spent</th>
+                    <th style={TH}>Date From</th>
+                    <th style={TH}>Date To</th>
+                    <th style={TH}>Self Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {extensionActs.map((r, i) => (
+                    <tr key={i}>
+                      <td style={TDC}>{i + 1}</td>
+                      <td style={TD}><TI val={r.particular} onChange={(v) => setExtensionActs((p) => p.map((row, j) => j === i ? { ...row, particular: v } : row))} placeholder="Activity / Particular" /></td>
+                      <td style={TDC}><TI val={r.hours} onChange={(v) => setExtensionActs((p) => p.map((row, j) => j === i ? { ...row, hours: v } : row))} center numeric placeholder="Hours" /></td>
+                      <td style={TDC}><TI val={r.dateFrom} onChange={(v) => setExtensionActs((p) => p.map((row, j) => j === i ? { ...row, dateFrom: v } : row))} center placeholder="DD/MM/YYYY" /></td>
+                      <td style={TDC}><TI val={r.dateTo} onChange={(v) => setExtensionActs((p) => p.map((row, j) => j === i ? { ...row, dateTo: v } : row))} center placeholder="DD/MM/YYYY" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setExtensionActs((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={5} placeholder="0-5" /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <RowBtns
+                onAdd={() => setExtensionActs((p) => [...p, { particular: "", hours: "", dateFrom: "", dateTo: "", score: "" }])}
+                onDel={() => setExtensionActs((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                canDel={extensionActs.length > 1}
+              />
+              <SectionNavFooter prevSection="sec4" nextSection="sec6" onNavigate={handleMyAppraisalSectionChange} />
+            </SC>
+          )}
+
+          {/* SECTION 6: DOMAIN SPECIFIC ACTIVITIES */}
+          {hodAppraisalTab === "sec6" && (
+            <SC title="6. Domain Specific Activities (60 Marks)" accent="#7c3aed" scoreBadge={`${sec6Total.toFixed(1)} / 60`} hideGuideline>
+              {/* A) OBE */}
+              <SubsectionTitle>A) Outcome Based Education (OBE) Implementation (20 Marks - 04 Marks each)</SubsectionTitle>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Particulars</th>
+                    <th style={TH}>Record Available</th>
+                    <th style={TH}>Self Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {obeRows.map((r, i) => (
+                    <tr key={i}>
+                      <td style={TDC}>{i + 1}</td>
+                      <td style={{ ...TD, fontWeight: 700 }}>{r.particular}</td>
+                      <td style={TD}>
+                        <select value={r.available} onChange={(e) => setObeRows((p) => p.map((row, j) => j === i ? { ...row, available: e.target.value } : row))} style={{ width: "100%", height: 32, border: "1px solid #cbd5e1", borderRadius: 4 }}>
+                          <option value="Yes">Yes (4 Marks)</option>
+                          <option value="No">No (0 Marks)</option>
+                        </select>
+                      </td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setObeRows((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={4} placeholder="0-4" /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {/* B) Participation */}
+              <SubsectionTitle>B) Faculty Participation in Refresher/Orientation/Workshops/STTP/FDP (15 Marks - 05 Marks each)</SubsectionTitle>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Name of Event</th>
+                    <th style={TH}>Organized by</th>
+                    <th style={TH}>Date & Duration</th>
+                    <th style={TH}>Self Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {partEvents.map((r, i) => (
+                    <tr key={i}>
+                      <td style={TDC}>{i + 1}</td>
+                      <td style={TD}><TI val={r.event} onChange={(v) => setPartEvents((p) => p.map((row, j) => j === i ? { ...row, event: v } : row))} placeholder="Name of Event" /></td>
+                      <td style={TD}><TI val={r.organizedBy} onChange={(v) => setPartEvents((p) => p.map((row, j) => j === i ? { ...row, organizedBy: v } : row))} placeholder="Organized By" /></td>
+                      <td style={TD}><TI val={r.dateDuration} onChange={(v) => setPartEvents((p) => p.map((row, j) => j === i ? { ...row, dateDuration: v } : row))} placeholder="Date / Duration" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setPartEvents((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={5} placeholder="0-5" /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <RowBtns
+                onAdd={() => setPartEvents((p) => [...p, { event: "", organizedBy: "", dateDuration: "", score: "" }])}
+                onDel={() => setPartEvents((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                canDel={partEvents.length > 1}
+              />
+
+              {/* C) Conducted */}
+              <SubsectionTitle>C) Workshops / Seminars / STTP / FDP Conducted / Organized (10 Marks)</SubsectionTitle>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Name of Event (WS, FDP, Seminar, STTP)</th>
+                    <th style={TH}>Date</th>
+                    <th style={TH}>Duration of Event</th>
+                    <th style={TH}>Self Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {condEvents.map((r, i) => (
+                    <tr key={i}>
+                      <td style={TDC}>{i + 1}</td>
+                      <td style={TD}><TI val={r.event} onChange={(v) => setCondEvents((p) => p.map((row, j) => j === i ? { ...row, event: v } : row))} placeholder="Event Name" /></td>
+                      <td style={TDC}><TI val={r.date} onChange={(v) => setCondEvents((p) => p.map((row, j) => j === i ? { ...row, date: v } : row))} center placeholder="DD/MM/YYYY" /></td>
+                      <td style={TD}><TI val={r.duration} onChange={(v) => setCondEvents((p) => p.map((row, j) => j === i ? { ...row, duration: v } : row))} placeholder="Duration" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setCondEvents((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric placeholder="5" /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <RowBtns
+                onAdd={() => setCondEvents((p) => [...p, { event: "", date: "", duration: "", score: "" }])}
+                onDel={() => setCondEvents((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                canDel={condEvents.length > 1}
+              />
+
+              {/* D) Invited */}
+              <SubsectionTitle>D) Teachers Invited as Resource Persons / Judges (05 Marks)</SubsectionTitle>
+              <div style={{ background: "#f8fafc", padding: 10, borderRadius: 6, marginBottom: 10, fontSize: 12, color: "#475569" }}>
+                University = 1 Mark | State = 2 Marks | National = 3 Marks | International = 5 Marks. Total max 5 Marks.
+              </div>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Name of Event</th>
+                    <th style={TH}>Organized by</th>
+                    <th style={TH}>Date / Duration</th>
+                    <th style={TH}>Level</th>
+                    <th style={TH}>Self Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {invitedTeachers.map((r, i) => {
+                    const rowMax = r.level === "International" ? 5 : r.level === "National" ? 3 : r.level === "State" ? 2 : 1;
+                    return (
+                      <tr key={i}>
+                        <td style={TDC}>{i + 1}</td>
+                        <td style={TD}><TI val={r.event} onChange={(v) => setInvitedTeachers((p) => p.map((row, j) => j === i ? { ...row, event: v } : row))} placeholder="Name of Event" /></td>
+                        <td style={TD}><TI val={r.organizedBy} onChange={(v) => setInvitedTeachers((p) => p.map((row, j) => j === i ? { ...row, organizedBy: v } : row))} placeholder="Organized By" /></td>
+                        <td style={TD}><TI val={r.dateDuration} onChange={(v) => setInvitedTeachers((p) => p.map((row, j) => j === i ? { ...row, dateDuration: v } : row))} placeholder="Date / Duration" /></td>
+                        <td style={TD}>
+                          <select value={r.level} onChange={(e) => setInvitedTeachers((p) => p.map((row, j) => j === i ? { ...row, level: e.target.value } : row))} style={{ width: "100%", height: 32, border: "1px solid #cbd5e1", borderRadius: 4 }}>
+                            <option value="University">University (1 Mark)</option>
+                            <option value="State">State (2 Marks)</option>
+                            <option value="National">National (3 Marks)</option>
+                            <option value="International">International (5 Marks)</option>
+                          </select>
+                        </td>
+                        <td style={TDS}><TI val={r.score} onChange={(v) => setInvitedTeachers((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={rowMax} placeholder={`0-${rowMax}`} /></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <RowBtns
+                onAdd={() => setInvitedTeachers((p) => [...p, { event: "", organizedBy: "", dateDuration: "", level: "University", score: "" }])}
+                onDel={() => setInvitedTeachers((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                canDel={invitedTeachers.length > 1}
+              />
+
+              {/* E) NPTEL */}
+              <SubsectionTitle>E) NPTEL or any other Certification (10 Marks - 05 Marks each)</SubsectionTitle>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Name of Subject</th>
+                    <th style={TH}>Duration of Course</th>
+                    <th style={TH}>Date of Completion</th>
+                    <th style={TH}>% of Score</th>
+                    <th style={TH}>Self Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {nptelCerts.map((r, i) => (
+                    <tr key={i}>
+                      <td style={TDC}>{i + 1}</td>
+                      <td style={TD}><TI val={r.subject} onChange={(v) => setNptelCerts((p) => p.map((row, j) => j === i ? { ...row, subject: v } : row))} placeholder="Subject Name" /></td>
+                      <td style={TD}><TI val={r.duration} onChange={(v) => setNptelCerts((p) => p.map((row, j) => j === i ? { ...row, duration: v } : row))} placeholder="e.g. 12 Weeks" /></td>
+                      <td style={TDC}><TI val={r.dateCompletion} onChange={(v) => setNptelCerts((p) => p.map((row, j) => j === i ? { ...row, dateCompletion: v } : row))} center placeholder="MM/YYYY" /></td>
+                      <td style={TDC}><TI val={r.pctScore} onChange={(v) => setNptelCerts((p) => p.map((row, j) => j === i ? { ...row, pctScore: v } : row))} center placeholder="%" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setNptelCerts((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={5} placeholder="0-5" /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <RowBtns
+                onAdd={() => setNptelCerts((p) => [...p, { subject: "", duration: "", dateCompletion: "", pctScore: "", score: "" }])}
+                onDel={() => setNptelCerts((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                canDel={nptelCerts.length > 1}
+              />
+              <SectionNavFooter prevSection="sec5" nextSection="sec7" onNavigate={handleMyAppraisalSectionChange} />
+            </SC>
+          )}
+
+          {/* SECTION 7: STUDENT MENTORING */}
+          {hodAppraisalTab === "sec7" && (
+            <SC title="7. Student Mentoring (20 Marks)" accent="#2563eb" scoreBadge={`${sec7Total.toFixed(1)} / 20`} hideGuideline>
+              {/* A) Internship */}
+              <SubsectionTitle>A) Student Internship under guidance (10 Marks - 05 Marks each)</SubsectionTitle>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Name of Student/Group</th>
+                    <th style={TH}>Name of Industry/Research Institute</th>
+                    <th style={TH}>Stipend & Duration</th>
+                    <th style={TH}>Progress Report Available</th>
+                    <th style={TH}>Self Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {internships.map((r, i) => (
+                    <tr key={i}>
+                      <td style={TDC}>{i + 1}</td>
+                      <td style={TD}><TI val={r.studentName} onChange={(v) => setInternships((p) => p.map((row, j) => j === i ? { ...row, studentName: v } : row))} placeholder="Student / Group Name" /></td>
+                      <td style={TD}><TI val={r.industryName} onChange={(v) => setInternships((p) => p.map((row, j) => j === i ? { ...row, industryName: v } : row))} placeholder="Industry / Institute Name" /></td>
+                      <td style={TD}><TI val={r.stipendDuration} onChange={(v) => setInternships((p) => p.map((row, j) => j === i ? { ...row, stipendDuration: v } : row))} placeholder="Stipend & Duration" /></td>
+                      <td style={TD}>
+                        <select value={r.progressReport} onChange={(e) => setInternships((p) => p.map((row, j) => j === i ? { ...row, progressReport: e.target.value } : row))} style={{ width: "100%", height: 32, border: "1px solid #cbd5e1", borderRadius: 4 }}>
+                          <option value="Yes">Yes (5 Marks)</option>
+                          <option value="No">No (0 Marks)</option>
+                        </select>
+                      </td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setInternships((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={5} placeholder="0-5" /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <RowBtns
+                onAdd={() => setInternships((p) => [...p, { studentName: "", industryName: "", stipendDuration: "", progressReport: "No", score: "" }])}
+                onDel={() => setInternships((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                canDel={internships.length > 1}
+              />
+
+              {/* B) Counseling & Mentoring */}
+              <SubsectionTitle>B) Counseling & Mentoring (10 Marks - 2.5 Marks each meeting)</SubsectionTitle>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Class & Div</th>
+                    <th style={TH}>No. of Students allotted</th>
+                    <th style={TH}>Frequency of meetings/year</th>
+                    <th style={TH}>Total meetings conducted</th>
+                    <th style={TH}>Self Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {mentoringRows.map((r, i) => (
+                    <tr key={i}>
+                      <td style={TDC}>{i + 1}</td>
+                      <td style={TD}><TI val={r.classDiv} onChange={(v) => setMentoringRows((p) => p.map((row, j) => j === i ? { ...row, classDiv: v } : row))} placeholder="Class & Div" /></td>
+                      <td style={TDC}><TI val={r.numStudents} onChange={(v) => setMentoringRows((p) => p.map((row, j) => j === i ? { ...row, numStudents: v } : row))} center numeric placeholder="Count" /></td>
+                      <td style={TD}><TI val={r.freqMeetings} onChange={(v) => setMentoringRows((p) => p.map((row, j) => j === i ? { ...row, freqMeetings: v } : row))} placeholder="e.g. Monthly" /></td>
+                      <td style={TDC}><TI val={r.totalMeetings} onChange={(v) => setMentoringRows((p) => p.map((row, j) => j === i ? { ...row, totalMeetings: v } : row))} center numeric placeholder="Total Meetings" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setMentoringRows((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={10} placeholder="0-10" /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <RowBtns
+                onAdd={() => setMentoringRows((p) => [...p, { classDiv: "", numStudents: "", freqMeetings: "", totalMeetings: "", score: "" }])}
+                onDel={() => setMentoringRows((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                canDel={mentoringRows.length > 1}
+              />
+              <SectionNavFooter prevSection="sec6" nextSection="sec8" onNavigate={handleMyAppraisalSectionChange} />
+            </SC>
+          )}
+
+          {/* SECTION 8: COLLABORATIONS */}
+          {hodAppraisalTab === "sec8" && (
+            <SC title="8. Collaborations (20 Marks)" accent="#0d9488" scoreBadge={`${sec8Total.toFixed(1)} / 20`} hideGuideline>
+              {/* A) Collaborative activities */}
+              <SubsectionTitle>A) Collaborative activities during the year (10 Marks - 05 Marks each)</SubsectionTitle>
+              <div style={{ background: "#f8fafc", padding: 10, borderRadius: 6, marginBottom: 10, fontSize: 12, color: "#475569" }}>
+                Participation in Industrial/Institutional/NGO/Government/Startups and Incubation activities.
+              </div>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Particulars of Activity</th>
+                    <th style={TH}>Name of Industry/Research Institute</th>
+                    <th style={TH}>Nature of Collaboration</th>
+                    <th style={TH}>Self Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {collaborations.map((r, i) => (
+                    <tr key={i}>
+                      <td style={TDC}>{i + 1}</td>
+                      <td style={TD}><TI val={r.particular} onChange={(v) => setCollaborations((p) => p.map((row, j) => j === i ? { ...row, particular: v } : row))} placeholder="Particulars of Activity" /></td>
+                      <td style={TD}><TI val={r.industryName} onChange={(v) => setCollaborations((p) => p.map((row, j) => j === i ? { ...row, industryName: v } : row))} placeholder="Industry / Institute Name" /></td>
+                      <td style={TD}><TI val={r.nature} onChange={(v) => setCollaborations((p) => p.map((row, j) => j === i ? { ...row, nature: v } : row))} placeholder="Nature of Collaboration" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setCollaborations((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={5} placeholder="0-5" /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <RowBtns
+                onAdd={() => setCollaborations((p) => [...p, { particular: "", industryName: "", nature: "", score: "" }])}
+                onDel={() => setCollaborations((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                canDel={collaborations.length > 1}
+              />
+
+              {/* B) Sponsored Projects */}
+              <SubsectionTitle>B) Sponsored Projects from Industry/Research Institute/PGCS/Seed fund (10 Marks - 05 Marks each)</SubsectionTitle>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Title of Project</th>
+                    <th style={TH}>Amount</th>
+                    <th style={TH}>Name of Sponsoring Industry/Institute</th>
+                    <th style={TH}>Self Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sponsoredProjects.map((r, i) => (
+                    <tr key={i}>
+                      <td style={TDC}>{i + 1}</td>
+                      <td style={TD}><TI val={r.projectTitle} onChange={(v) => setSponsoredProjects((p) => p.map((row, j) => j === i ? { ...row, projectTitle: v } : row))} placeholder="Project Title" /></td>
+                      <td style={TDC}><TI val={r.amount} onChange={(v) => setSponsoredProjects((p) => p.map((row, j) => j === i ? { ...row, amount: v } : row))} center placeholder="Amount (Rs)" /></td>
+                      <td style={TD}><TI val={r.sponsoringAgency} onChange={(v) => setSponsoredProjects((p) => p.map((row, j) => j === i ? { ...row, sponsoringAgency: v } : row))} placeholder="Sponsoring Agency" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setSponsoredProjects((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={5} placeholder="0-5" /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <RowBtns
+                onAdd={() => setSponsoredProjects((p) => [...p, { projectTitle: "", amount: "", sponsoringAgency: "", score: "" }])}
+                onDel={() => setSponsoredProjects((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                canDel={sponsoredProjects.length > 1}
+              />
+              <SectionNavFooter prevSection="sec7" nextSection="sec9" onNavigate={handleMyAppraisalSectionChange} />
+            </SC>
+          )}
+
+          {/* SECTION 9: RESEARCH ACTIVITY */}
+          {hodAppraisalTab === "sec9" && (
+            <SC title="9. Research Activity (80 Marks)" accent="#4338ca" scoreBadge={`${sec9Total.toFixed(1)} / 80`} hideGuideline>
+              {/* A) Research Grants */}
+              <SubsectionTitle>A) Research grants / projects from National funding agencies (10 Marks)</SubsectionTitle>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Title of Project</th>
+                    <th style={TH}>Funding Agency & Duration</th>
+                    <th style={TH}>Total Grant Sanctioned (Lakhs)</th>
+                    <th style={TH}>Self Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {researchGrants.map((r, i) => (
+                    <tr key={i}>
+                      <td style={TDC}>{i + 1}</td>
+                      <td style={TD}><TI val={r.title} onChange={(v) => setResearchGrants((p) => p.map((row, j) => j === i ? { ...row, title: v } : row))} placeholder="Project Title" /></td>
+                      <td style={TD}><TI val={r.fundingAgency} onChange={(v) => setResearchGrants((p) => p.map((row, j) => j === i ? { ...row, fundingAgency: v } : row))} placeholder="Funding Agency & Duration" /></td>
+                      <td style={TDC}><TI val={r.grantAmount} onChange={(v) => setResearchGrants((p) => p.map((row, j) => j === i ? { ...row, grantAmount: v } : row))} center numeric placeholder="Grant (Lakhs)" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setResearchGrants((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={10} placeholder="0-10" /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <RowBtns
+                onAdd={() => setResearchGrants((p) => [...p, { title: "", fundingAgency: "", grantAmount: "", score: "" }])}
+                onDel={() => setResearchGrants((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                canDel={researchGrants.length > 1}
+              />
+
+              {/* B) UGC CARE Journals */}
+              <SubsectionTitle>B) Research Publication in peer reviewed journals (UGC CARE List) (10 Marks)</SubsectionTitle>
+              <div style={{ background: "#f8fafc", padding: 10, borderRadius: 6, marginBottom: 10, fontSize: 12, color: "#475569" }}>
+                1st Author = 3 Marks | 2nd Author = 2 Marks | 3rd Author = 1 Mark. Total max 10 Marks.
+              </div>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Title of Paper</th>
+                    <th style={TH}>Name of Journal</th>
+                    <th style={TH}>Publisher</th>
+                    <th style={TH}>ISBN/ISSN Number</th>
+                    <th style={TH}>Author Position</th>
+                    <th style={TH}>Self Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ugcJournals.map((r, i) => {
+                    const rowMax = r.authorPosition === "1st Author" ? 3 : r.authorPosition === "2nd Author" ? 2 : 1;
+                    return (
+                      <tr key={i}>
+                        <td style={TDC}>{i + 1}</td>
+                        <td style={TD}><TI val={r.title} onChange={(v) => setUgcJournals((p) => p.map((row, j) => j === i ? { ...row, title: v } : row))} placeholder="Paper Title" /></td>
+                        <td style={TD}><TI val={r.journal} onChange={(v) => setUgcJournals((p) => p.map((row, j) => j === i ? { ...row, journal: v } : row))} placeholder="Journal Name" /></td>
+                        <td style={TD}><TI val={r.publisher} onChange={(v) => setUgcJournals((p) => p.map((row, j) => j === i ? { ...row, publisher: v } : row))} placeholder="Publisher" /></td>
+                        <td style={TDC}><TI val={r.issn} onChange={(v) => setUgcJournals((p) => p.map((row, j) => j === i ? { ...row, issn: v } : row))} center placeholder="ISSN/ISBN" /></td>
+                        <td style={TD}>
+                          <select value={r.authorPosition} onChange={(e) => setUgcJournals((p) => p.map((row, j) => j === i ? { ...row, authorPosition: e.target.value } : row))} style={{ width: "100%", height: 32, border: "1px solid #cbd5e1", borderRadius: 4 }}>
+                            <option value="1st Author">1st Author (3 Marks)</option>
+                            <option value="2nd Author">2nd Author (2 Marks)</option>
+                            <option value="3rd Author">3rd Author (1 Mark)</option>
+                          </select>
+                        </td>
+                        <td style={TDS}><TI val={r.score} onChange={(v) => setUgcJournals((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={rowMax} placeholder={`0-${rowMax}`} /></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <RowBtns
+                onAdd={() => setUgcJournals((p) => [...p, { title: "", journal: "", publisher: "", issn: "", authorPosition: "1st Author", score: "" }])}
+                onDel={() => setUgcJournals((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                canDel={ugcJournals.length > 1}
+              />
+
+              {/* C) IEEE/Scopus */}
+              <SubsectionTitle>C) Research Publication in IEEE/SCOPUS/SCI/SCIE/Web of Science (10 Marks)</SubsectionTitle>
+              <div style={{ background: "#f8fafc", padding: 10, borderRadius: 6, marginBottom: 10, fontSize: 12, color: "#475569" }}>
+                1st Author = 10 Marks | 2nd Author = 8 Marks | 3rd Author = 6 Marks | Other = 3 Marks. Total max 10 Marks.
+              </div>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Title of Paper</th>
+                    <th style={TH}>Name of Journal</th>
+                    <th style={TH}>Citation Index</th>
+                    <th style={TH}>h Index</th>
+                    <th style={TH}>Author Position</th>
+                    <th style={TH}>Self Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {indexedJournals.map((r, i) => {
+                    const pos = r.authorPosition;
+                    const rowMax = pos === "1st Author" ? 10 : pos === "2nd Author" ? 8 : pos === "3rd Author" ? 6 : 3;
+                    return (
+                      <tr key={i}>
+                        <td style={TDC}>{i + 1}</td>
+                        <td style={TD}><TI val={r.title} onChange={(v) => setIndexedJournals((p) => p.map((row, j) => j === i ? { ...row, title: v } : row))} placeholder="Paper Title" /></td>
+                        <td style={TD}><TI val={r.journal} onChange={(v) => setIndexedJournals((p) => p.map((row, j) => j === i ? { ...row, journal: v } : row))} placeholder="Journal Name" /></td>
+                        <td style={TDC}><TI val={r.citationIndex} onChange={(v) => setIndexedJournals((p) => p.map((row, j) => j === i ? { ...row, citationIndex: v } : row))} center numeric placeholder="Citation" /></td>
+                        <td style={TDC}><TI val={r.hIndex} onChange={(v) => setIndexedJournals((p) => p.map((row, j) => j === i ? { ...row, hIndex: v } : row))} center numeric placeholder="h-index" /></td>
+                        <td style={TD}>
+                          <select value={r.authorPosition} onChange={(e) => setIndexedJournals((p) => p.map((row, j) => j === i ? { ...row, authorPosition: e.target.value } : row))} style={{ width: "100%", height: 32, border: "1px solid #cbd5e1", borderRadius: 4 }}>
+                            <option value="1st Author">1st Author (10 Marks)</option>
+                            <option value="2nd Author">2nd Author (8 Marks)</option>
+                            <option value="3rd Author">3rd Author (6 Marks)</option>
+                            <option value="Other">Other (3 Marks)</option>
+                          </select>
+                        </td>
+                        <td style={TDS}><TI val={r.score} onChange={(v) => setIndexedJournals((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={rowMax} placeholder={`0-${rowMax}`} /></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <RowBtns
+                onAdd={() => setIndexedJournals((p) => [...p, { title: "", journal: "", citationIndex: "", hIndex: "", authorPosition: "1st Author", score: "" }])}
+                onDel={() => setIndexedJournals((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                canDel={indexedJournals.length > 1}
+              />
+
+              {/* D) Conferences */}
+              <SubsectionTitle>D) Faculty Participation in Conferences (05 Marks - 2.5 Marks each)</SubsectionTitle>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Title of Paper</th>
+                    <th style={TH}>Name of Conference</th>
+                    <th style={TH}>Title of proceedings of conference</th>
+                    <th style={TH}>Self Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {conferences.map((r, i) => (
+                    <tr key={i}>
+                      <td style={TDC}>{i + 1}</td>
+                      <td style={TD}><TI val={r.title} onChange={(v) => setConferences((p) => p.map((row, j) => j === i ? { ...row, title: v } : row))} placeholder="Paper Title" /></td>
+                      <td style={TD}><TI val={r.conference} onChange={(v) => setConferences((p) => p.map((row, j) => j === i ? { ...row, conference: v } : row))} placeholder="Conference Name" /></td>
+                      <td style={TD}><TI val={r.proceedingsTitle} onChange={(v) => setConferences((p) => p.map((row, j) => j === i ? { ...row, proceedingsTitle: v } : row))} placeholder="Proceedings Title" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setConferences((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={2.5} placeholder="0-2.5" /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <RowBtns
+                onAdd={() => setConferences((p) => [...p, { title: "", conference: "", proceedingsTitle: "", score: "" }])}
+                onDel={() => setConferences((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                canDel={conferences.length > 1}
+              />
+
+              {/* E) Books/Chapters */}
+              <SubsectionTitle>E) Books / Chapters in Edited Volumes (05 Marks - Book: 5, Chapter: 2.5)</SubsectionTitle>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Type</th>
+                    <th style={TH}>Title of the Book</th>
+                    <th style={TH}>Chapter Name</th>
+                    <th style={TH}>Publisher</th>
+                    <th style={TH}>Self Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {booksChapters.map((r, i) => {
+                    const rowMax = r.type === "Book" ? 5 : 2.5;
+                    return (
+                      <tr key={i}>
+                        <td style={TDC}>{i + 1}</td>
+                        <td style={TD}>
+                          <select value={r.type} onChange={(e) => setBooksChapters((p) => p.map((row, j) => j === i ? { ...row, type: e.target.value } : row))} style={{ width: "100%", height: 32, border: "1px solid #cbd5e1", borderRadius: 4 }}>
+                            <option value="Book">Book (5 Marks)</option>
+                            <option value="Chapter">Chapter (2.5 Marks)</option>
+                          </select>
+                        </td>
+                        <td style={TD}><TI val={r.title} onChange={(v) => setBooksChapters((p) => p.map((row, j) => j === i ? { ...row, title: v } : row))} placeholder="Book Title" /></td>
+                        <td style={TD}><TI val={r.chapterName} onChange={(v) => setBooksChapters((p) => p.map((row, j) => j === i ? { ...row, chapterName: v } : row))} placeholder="Chapter Name" /></td>
+                        <td style={TD}><TI val={r.publisher} onChange={(v) => setBooksChapters((p) => p.map((row, j) => j === i ? { ...row, publisher: v } : row))} placeholder="Publisher" /></td>
+                        <td style={TDS}><TI val={r.score} onChange={(v) => setBooksChapters((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={rowMax} placeholder={`0-${rowMax}`} /></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <RowBtns
+                onAdd={() => setBooksChapters((p) => [...p, { type: "Book", title: "", chapterName: "", publisher: "", score: "" }])}
+                onDel={() => setBooksChapters((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                canDel={booksChapters.length > 1}
+              />
+
+              {/* F) Reviewer/Editorial */}
+              <SubsectionTitle>F) Details of teachers invited as Reviewer / Editorial Board Member (05 Marks - 05 Marks each)</SubsectionTitle>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Name of Journal/Conference/Book</th>
+                    <th style={TH}>National/International</th>
+                    <th style={TH}>Role</th>
+                    <th style={TH}>Self Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reviewerEditorial.map((r, i) => (
+                    <tr key={i}>
+                      <td style={TDC}>{i + 1}</td>
+                      <td style={TD}><TI val={r.journalBook} onChange={(v) => setReviewerEditorial((p) => p.map((row, j) => j === i ? { ...row, journalBook: v } : row))} placeholder="Journal / Book Name" /></td>
+                      <td style={TD}>
+                        <select value={r.level} onChange={(e) => setReviewerEditorial((p) => p.map((row, j) => j === i ? { ...row, level: e.target.value } : row))} style={{ width: "100%", height: 32, border: "1px solid #cbd5e1", borderRadius: 4 }}>
+                          <option value="National">National</option>
+                          <option value="International">International</option>
+                        </select>
+                      </td>
+                      <td style={TD}>
+                        <select value={r.role} onChange={(e) => setReviewerEditorial((p) => p.map((row, j) => j === i ? { ...row, role: e.target.value } : row))} style={{ width: "100%", height: 32, border: "1px solid #cbd5e1", borderRadius: 4 }}>
+                          <option value="Reviewer">Reviewer</option>
+                          <option value="Editorial Board Member">Editorial Board Member</option>
+                        </select>
+                      </td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setReviewerEditorial((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={5} placeholder="0-5" /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <RowBtns
+                onAdd={() => setReviewerEditorial((p) => [...p, { journalBook: "", level: "National", role: "Reviewer", score: "" }])}
+                onDel={() => setReviewerEditorial((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                canDel={reviewerEditorial.length > 1}
+              />
+
+              {/* G) Patents */}
+              <SubsectionTitle>G) Patents / Copyright during the year (10 Marks)</SubsectionTitle>
+              <div style={{ background: "#f8fafc", padding: 10, borderRadius: 6, marginBottom: 10, fontSize: 12, color: "#475569" }}>
+                Copyright = 2.5 Marks | Design Patent = 05 Marks | Utility Patent = 10 Marks. Total max 10 Marks.
+              </div>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Title of Patent/Copyright</th>
+                    <th style={TH}>Type</th>
+                    <th style={TH}>Application No.</th>
+                    <th style={TH}>Status</th>
+                    <th style={TH}>Self Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {patentsCopyrights.map((r, i) => {
+                    const rowMax = r.type === "Utility Patent" ? 10 : r.type === "Design Patent" ? 5 : 2.5;
+                    return (
+                      <tr key={i}>
+                        <td style={TDC}>{i + 1}</td>
+                        <td style={TD}><TI val={r.title} onChange={(v) => setPatentsCopyrights((p) => p.map((row, j) => j === i ? { ...row, title: v } : row))} placeholder="Patent / Copyright Title" /></td>
+                        <td style={TD}>
+                          <select value={r.type} onChange={(e) => setPatentsCopyrights((p) => p.map((row, j) => j === i ? { ...row, type: e.target.value } : row))} style={{ width: "100%", height: 32, border: "1px solid #cbd5e1", borderRadius: 4 }}>
+                            <option value="Copyright">Copyright (2.5 Marks)</option>
+                            <option value="Design Patent">Design Patent (5 Marks)</option>
+                            <option value="Utility Patent">Utility Patent (10 Marks)</option>
+                          </select>
+                        </td>
+                        <td style={TDC}><TI val={r.appNo} onChange={(v) => setPatentsCopyrights((p) => p.map((row, j) => j === i ? { ...row, appNo: v } : row))} center placeholder="App No." /></td>
+                        <td style={TD}>
+                          <select value={r.status} onChange={(e) => setPatentsCopyrights((p) => p.map((row, j) => j === i ? { ...row, status: e.target.value } : row))} style={{ width: "100%", height: 32, border: "1px solid #cbd5e1", borderRadius: 4 }}>
+                            <option value="Filed">Filed</option>
+                            <option value="Published">Published</option>
+                            <option value="Granted">Granted</option>
+                          </select>
+                        </td>
+                        <td style={TDS}><TI val={r.score} onChange={(v) => setPatentsCopyrights((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={rowMax} placeholder={`0-${rowMax}`} /></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <RowBtns
+                onAdd={() => setPatentsCopyrights((p) => [...p, { title: "", type: "Copyright", appNo: "", status: "Filed", score: "" }])}
+                onDel={() => setPatentsCopyrights((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                canDel={patentsCopyrights.length > 1}
+              />
+
+              {/* H) Development Activities */}
+              <SubsectionTitle>H) Development Activities (05 Marks - 05 Marks each)</SubsectionTitle>
+              <div style={{ background: "#f8fafc", padding: 10, borderRadius: 6, marginBottom: 10, fontSize: 12, color: "#475569" }}>
+                Product Development / Laboratories / Working models, charts, monograms etc.
+              </div>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Activity</th>
+                    <th style={TH}>Funding Amount (if any)</th>
+                    <th style={TH}>Self Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {developmentActs.map((r, i) => (
+                    <tr key={i}>
+                      <td style={TDC}>{i + 1}</td>
+                      <td style={TD}><TI val={r.activity} onChange={(v) => setDevelopmentActs((p) => p.map((row, j) => j === i ? { ...row, activity: v } : row))} placeholder="Activity Name" /></td>
+                      <td style={TDC}><TI val={r.fundingAmount} onChange={(v) => setDevelopmentActs((p) => p.map((row, j) => j === i ? { ...row, fundingAmount: v } : row))} center placeholder="Amount" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setDevelopmentActs((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={5} placeholder="0-5" /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <RowBtns
+                onAdd={() => setDevelopmentActs((p) => [...p, { activity: "", fundingAmount: "", score: "" }])}
+                onDel={() => setDevelopmentActs((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                canDel={developmentActs.length > 1}
+              />
+
+              {/* I) Consultancy */}
+              <SubsectionTitle>I) Consultancy from Industry (05 Marks - 05 Marks each)</SubsectionTitle>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Area / Nature of Consultancy</th>
+                    <th style={TH}>Funds Generated (Rs.)</th>
+                    <th style={TH}>Self Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {consultancyRows.map((r, i) => (
+                    <tr key={i}>
+                      <td style={TDC}>{i + 1}</td>
+                      <td style={TD}><TI val={r.area} onChange={(v) => setConsultancyRows((p) => p.map((row, j) => j === i ? { ...row, area: v } : row))} placeholder="Consultancy Area" /></td>
+                      <td style={TDC}><TI val={r.fundsGenerated} onChange={(v) => setConsultancyRows((p) => p.map((row, j) => j === i ? { ...row, fundsGenerated: v } : row))} center numeric placeholder="Funds (Rs)" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setConsultancyRows((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={5} placeholder="0-5" /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <RowBtns
+                onAdd={() => setConsultancyRows((p) => [...p, { area: "", fundsGenerated: "", score: "" }])}
+                onDel={() => setConsultancyRows((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                canDel={consultancyRows.length > 1}
+              />
+
+              {/* J) Awards */}
+              <SubsectionTitle>J) Awards won by Teacher during the year (05 Marks - 05 Marks each)</SubsectionTitle>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Particular</th>
+                    <th style={TH}>Awarding Agency</th>
+                    <th style={TH}>Self Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {awardsRows.map((r, i) => (
+                    <tr key={i}>
+                      <td style={TDC}>{i + 1}</td>
+                      <td style={TD}><TI val={r.particular} onChange={(v) => setAwardsRows((p) => p.map((row, j) => j === i ? { ...row, particular: v } : row))} placeholder="Award Particulars" /></td>
+                      <td style={TD}><TI val={r.agency} onChange={(v) => setAwardsRows((p) => p.map((row, j) => j === i ? { ...row, agency: v } : row))} placeholder="Awarding Agency" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setAwardsRows((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={5} placeholder="0-5" /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <RowBtns
+                onAdd={() => setAwardsRows((p) => [...p, { particular: "", agency: "", score: "" }])}
+                onDel={() => setAwardsRows((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                canDel={awardsRows.length > 1}
+              />
+
+              {/* K) Other Achievements */}
+              <SubsectionTitle>K) Any other considerable achievements (10 Marks - 05 Marks each)</SubsectionTitle>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Achievement</th>
+                    <th style={TH}>Level of Achievement (University/State/National etc.)</th>
+                    <th style={TH}>Self Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {otherAchievements.map((r, i) => (
+                    <tr key={i}>
+                      <td style={TDC}>{i + 1}</td>
+                      <td style={TD}><TI val={r.achievement} onChange={(v) => setOtherAchievements((p) => p.map((row, j) => j === i ? { ...row, achievement: v } : row))} placeholder="Achievement Details" /></td>
+                      <td style={TD}><TI val={r.level} onChange={(v) => setOtherAchievements((p) => p.map((row, j) => j === i ? { ...row, level: v } : row))} placeholder="Level of Achievement" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setOtherAchievements((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={5} placeholder="0-5" /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <RowBtns
+                onAdd={() => setOtherAchievements((p) => [...p, { achievement: "", level: "", score: "" }])}
+                onDel={() => setOtherAchievements((p) => p.length > 1 ? p.slice(0, -1) : p)}
+                canDel={otherAchievements.length > 1}
+              />
+              <SectionNavFooter prevSection="sec8" nextSection="sec10" onNavigate={handleMyAppraisalSectionChange} />
+            </SC>
+          )}
+
+          {/* SECTION 10: PERSONAL ATTRIBUTES */}
+          {hodAppraisalTab === "sec10" && (
+            <SC title="10. Personal Attributes (10 Marks) (01 Mark each)" accent="#ec4899" scoreBadge={`${sec10Total.toFixed(1)} / 10`} hideGuideline>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Attribute</th>
+                    <th style={TH}>Self Score (0 or 1)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {personalAttributes.map((r, i) => (
+                    <tr key={i}>
+                      <td style={TDC}>{i + 1}</td>
+                      <td style={{ ...TD, fontWeight: 700 }}>{r.attribute}</td>
+                      <td style={TDS}>
+                        <TI val={r.score} onChange={(v) => setPersonalAttributes((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={1} placeholder="0 or 1" />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <SectionNavFooter prevSection="sec9" nextSection="summary" onNavigate={handleMyAppraisalSectionChange} />
+            </SC>
+          )}
+
+          {/* SUMMARY OF EVALUATION MARKS */}
+          {hodAppraisalTab === "summary" && (
+            <SC title="Summary of Evaluation Marks (300 Marks)" accent="#1e1b4b" scoreBadge={`${grandTotal.toFixed(1)} / 300`} hideGuideline>
+              <table style={T}>
+                <thead>
+                  <tr>
+                    <th style={TH}>Sr. No.</th>
+                    <th style={TH}>Major Parameters Assessment of Teachers</th>
+                    <th style={TH}>Evaluation (300 Marks)</th>
+                    <th style={TH}>Self Appraisal Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[
+                    ["1", "Teaching Learning Process", 50, sec1Total],
+                    ["2", "Feedback from Students", 10, sec2Total],
+                    ["3", "Administrative / Executive responsibilities / Institutional Commitments", 20, sec3Total],
+                    ["4", "Evaluation and Assessment", 20, sec4Total],
+                    ["5", "Extension and Outreach Activities", 10, sec5Total],
+                    ["6", "Domain Specific Activities", 60, sec6Total],
+                    ["7", "Students Mentoring", 20, sec7Total],
+                    ["8", "Collaborations", 20, sec8Total],
+                    ["9", "Research Activity", 80, sec9Total],
+                    ["10", "Personal Attributes", 10, sec10Total],
+                  ].map(([sn, name, max, score]) => (
+                    <tr key={sn} style={{ background: Number(sn) % 2 === 0 ? "#f8fafc" : "#fff" }}>
+                      <td style={TDC}>{sn}</td>
+                      <td style={{ ...TD, fontWeight: 700 }}>{name}</td>
+                      <td style={TDC}>{max}</td>
+                      <td style={{ ...TDS, fontWeight: 800, color: "#4f46e5" }}>{Number(score).toFixed(1)}</td>
+                    </tr>
+                  ))}
+                  <tr style={{ background: "#eff6ff", borderTop: "2px solid #93c5fd" }}>
+                    <td style={{ ...TDC, fontWeight: 900 }} colSpan={2}>Total Marks</td>
+                    <td style={{ ...TDC, fontWeight: 900 }}>300</td>
+                    <td style={{ ...TDS, fontWeight: 900, color: "#1e1b4b", fontSize: 16 }}>{grandTotal.toFixed(1)}</td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <div style={{ marginTop: 24, padding: 16, background: "#f8fafc", borderRadius: 10, border: "1px solid #e2e8f0" }}>
+                <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: submitted ? "default" : "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={declarationChecked}
+                    disabled={submitted}
+                    onChange={(e) => setDeclarationChecked(e.target.checked)}
+                    style={{ marginTop: 3, width: 16, height: 16, flexShrink: 0 }}
+                  />
+                  <span style={{ fontSize: 13, color: "#334155", fontStyle: "italic", fontWeight: 600 }}>
+                    I hereby declare that, the information given above by me is true & correct to the best of my knowledge & belief.
+                  </span>
+                </label>
+                <div style={{ marginTop: 16, display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 700, color: "#475569" }}>
+                  <div>Place: Kolhapur</div>
+                  <div>Applicant Signature: {info.name || titleNameFallback}</div>
                 </div>
-                <div style={{ display: "flex", justifyContent: "center", marginTop: 16 }}>
+
+                <div style={{ marginTop: 20, display: "flex", gap: 12, flexWrap: "wrap", borderTop: "1px solid #e2e8f0", paddingTop: 16 }}>
                   <button
                     type="button"
-                    onClick={generateReport}
-                    style={{ padding: "10px 28px", background: "#4c1d95", color: "#fff", border: "none", borderRadius: 7, cursor: "pointer", fontWeight: 700, fontSize: 13, fontFamily: "inherit" }}
+                    onClick={handleGenerateReport}
+                    style={{ padding: "10px 20px", background: "#fff", color: "#1e1b4b", border: "1px solid #cbd5e1", borderRadius: 9, cursor: "pointer", fontWeight: 800, fontSize: 13, fontFamily: "inherit" }}
                   >
                     Generate Report
                   </button>
-                </div>
-                <div style={{ marginTop: 18, borderTop: "1px solid #e5e7eb", paddingTop: 16 }}>
-                  <div style={{ fontSize: 13, color: "#374151", fontWeight: 900, marginBottom: 10 }}>Attachments</div>
-                  {documentCount ? (
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, flexWrap: "wrap", border: "1px solid #e5e7eb", borderRadius: 10, padding: "14px 16px", background: "#fff" }}>
-                      <div>
-                        <div style={{ fontSize: 13, color: "#111827", fontWeight: 900 }}>Attachments for {info.ay || "selected academic year"}</div>
-                        <div style={{ marginTop: 4, fontSize: 12, color: "#64748b", fontWeight: 700 }}>{documentCount} file{documentCount === 1 ? "" : "s"} available</div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={handleDownloadAttachments}
-                        disabled={attachmentDownloading}
-                        className="appraisal-report-button"
-                        style={{ minWidth: 190, minHeight: 40, padding: "10px 18px", background: attachmentDownloading ? "#64748b" : "linear-gradient(180deg,#6d28d9 0%,#4c1d95 100%)", color: "#fff", border: "none", borderRadius: 9, cursor: attachmentDownloading ? "not-allowed" : "pointer", fontWeight: 800, fontSize: 13, fontFamily: "inherit", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 9, boxShadow: attachmentDownloading ? "none" : "0 10px 20px rgba(76,29,149,0.18)", opacity: attachmentDownloading ? 0.78 : 1 }}
-                      >
-                        <InlineSvgIcon paths={SUMMARY_ICONS.document} size={16} />
-                        {attachmentDownloading ? "Preparing..." : "Download Attachments"}
-                      </button>
-                    </div>
-                  ) : (
-                    <div style={{ fontSize: 12, color: "#64748b", fontWeight: 700, padding: "12px 14px", border: "1px solid #e5e7eb", borderRadius: 10, background: "#f8fafc" }}>No attachments found for this closed appraisal year.</div>
-                  )}
-                </div>
-              </SC>
-            ) : isLegacyTwoPartYear ? (
-              <LegacyPreviousYearReport
-                sectionView={hodAppraisalTab}
-                academicYear={info.ay}
-                profile={{ ...profileFromsessionStorage(), ...info }}
-                reviews={workflowReviews}
-                storedTotals={legacyReportTotals}
-                docs={docs}
-                lectures={lectures}
-                courseFile={courseFile}
-                innovRows={innovRows}
-                projects={projects}
-                quals={quals}
-                feedback={feedback}
-                deptActs={deptActs}
-                uniActs={uniActs}
-                society={society}
-                industry={industry}
-                acr={acr}
-                journals={journals}
-                books={books}
-                ict={ict}
-                research={research}
-                projects2={projects2}
-                externalProjects={externalProjects}
-                patents={patents}
-                awards={awards}
-                confs={confs}
-                proposals={proposals}
-                products={products}
-                fdps={fdps}
-                training={training}
-              />
-            ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              {!formLocked && !submitting && (
-                <div style={{ display: "flex", justifyContent: "flex-end" }}>
                   <button
                     type="button"
-                    onClick={fillStandardDummyData}
-                    style={{ padding: "8px 14px", background: "#0f766e", color: "#fff", border: "none", borderRadius: 7, cursor: "pointer", fontWeight: 800, fontSize: 12, fontFamily: "inherit", boxShadow: "0 8px 18px rgba(15,118,110,0.18)" }}
+                    onClick={handleSubmitAppraisal}
+                    disabled={!declarationChecked || submitted}
+                    style={{
+                      padding: "10px 20px",
+                      background: submitted ? "#94a3b8" : (!declarationChecked ? "#c7d2fe" : "#4f46e5"),
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: 9,
+                      cursor: (!declarationChecked || submitted) ? "not-allowed" : "pointer",
+                      fontWeight: 800,
+                      fontSize: 13,
+                      fontFamily: "inherit",
+                      boxShadow: submitted ? "none" : "0 4px 14px rgba(79,70,229,0.28)",
+                    }}
                   >
-                    Fill Dummy Test Data
+                    {submitted ? "Submitted" : "Submit Appraisal"}
                   </button>
                 </div>
-              )}
-              <fieldset disabled={formLocked && hodAppraisalTab !== "summary"} style={{ flex: 1, minWidth: 0, border: 0, padding: 0, margin: 0, opacity: formLocked && hodAppraisalTab !== "summary" ? 0.86 : 1 }}>
-
-                {/* Part A Tab */}
-                {hodAppraisalTab === "partA" && (
-                  <SC title={`Part A - Teaching & Academic Activities (Max ${effectivePartAMax})`} accent="#5b5ceb" scoreBadge={`${partATotal.toFixed(1)} / ${effectivePartAMax}`}>
-                    <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 4, fontWeight: 600 }}>Fill in your teaching and academic activities for the appraisal period. Enter scores for each item.</div>
-                    {/* A1. Teaching Process */}
-                    <div style={{ marginBottom: 16, order: 1 }}>
-                      <SubsectionTitle icon="teaching">A1. Course Delivery & Classroom Engagement - Max 40 marks</SubsectionTitle>
-                      <table style={T}>
-                        <thead>
-                          <tr>
-                            <th style={TH}>SN</th>
-                            <th style={TH}>Semester</th>
-                            <th style={TH}>Course Code / Name</th>
-                            <th style={TH}>Classes (as per course structure)</th>
-                            <th style={TH}>Classes Actually Conducted</th>
-                            <th style={TH}>% Conducted</th>
-                            <th style={TH}>Attachment</th>
-                            <th style={TH}>View Docs</th>
-                            <th style={TH}>Score</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {lectures.slice(0, 4).map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}><TI val={r.sem} onChange={(v) => setLec(i, "sem", v)} placeholder="e.g. 2026-27 Sem-I" /></td>
-                              <td style={TD}><TI val={r.code} onChange={(v) => setLec(i, "code", v)} textOnly placeholder="e.g. CS201 - Data Structures" /></td>
-                              <td style={TDC}><TI val={r.planned} onChange={(v) => setLec(i, "planned", v)} center numeric placeholder="Planned" /></td>
-                              <td style={TDC}><TI val={r.conducted} onChange={(v) => setLec(i, "conducted", v)} center numeric placeholder="Conducted" /></td>
-                              <td style={{ ...TDC, fontWeight: 700 }}>{r.pctConducted}</td>
-                              <td style={TD}><DocCell id={`lec-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`lec-${i}`} docs={docs} /></td>
-                              <td style={{ ...TDS, fontWeight: 800 }}>{r.score}</td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#eff6ff" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={8}>Total Score (Max 40)</td>
-                            <td style={{ ...TDS, fontWeight: "bold", color: "#1e3a5f" }}>{totalLecScore.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns
-                        onAdd={() => {
-                          if (lectures.length >= 4) {
-                            alert("A1. Course Delivery & Classroom Engagement allows a maximum of 4 courses (4 rows).");
-                            return;
-                          }
-                          setLectures((p) => [...p, { sem: "", code: "", planned: "", conducted: "", score: "", hod: "", director: "" }]);
-                        }}
-                        onDel={() => setLectures((p) => (p.length > 1 ? p.slice(0, -1) : p))}
-                        canDel={lectures.length > 1}
-                      />
-                    </div>
-
-                    {/* A2. Course File */}
-                    <div style={{ marginBottom: 16, order: 2 }}>
-                      <SubsectionTitle icon="folder">A2. Course File & Curriculum Documentation - Max 20 marks</SubsectionTitle>
-                      <table style={T}>
-                        <thead>
-                          <tr>
-                            <th style={{ ...TH, width: 30 }}>SN</th>
-                            <th style={TH}>Course / Paper</th>
-                            <th style={TH}>Program & Semester</th>
-                            <th style={TH}>IQAC Index Compliance (Yes/No, with proof)</th>
-                            <th style={TH}>Attachment</th>
-                            <th style={TH}>View Docs</th>
-                            <th style={TH}>Score</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {courseFile.map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}><TI val={r.course} onChange={(v) => setCF(i, "course", v)} placeholder="Course code / paper name" /></td>
-                              <td style={TD}><TI val={r.title} onChange={(v) => setCF(i, "title", v)} placeholder="Title / Program & Semester" /></td>
-                              <td style={TD}>
-                                <select value={r.details} onChange={(e) => setCF(i, "details", e.target.value)} style={{ width: "100%", height: 30, border: "1px solid #cbd5e1", borderRadius: 4, background: "#fff", fontFamily: "inherit", fontSize: 11 }}>
-                                  <option value="">Select</option>
-                                  <option value="Yes">Yes</option>
-                                  <option value="No">No</option>
-                                </select>
-                              </td>
-                              <td style={TD}><DocCell id={`courseFile-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`courseFile-${i}`} docs={docs} /></td>
-                              <td style={TDS}><TI val={r.score} onChange={(v) => setCF(i, "score", v === "" ? "" : String(clampScore(v, SCORE_LIMITS.courseFileRow)))} numeric max={SCORE_LIMITS.courseFileRow} center /></td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#eff6ff" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={6}>Total Score (Max 20)</td>
-                            <td style={{ ...TDS, fontWeight: "bold", color: "#1e3a5f" }}>{courseFileScore.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setCourseFile((p) => [...p, { course: "", title: "", details: "", score: "", hod: "", director: "" }])} onDel={() => setCourseFile((p) => (p.length > 1 ? p.slice(0, -1) : p))} canDel={courseFile.length > 1} />
-                    </div>
-
-                    {/* A3. Innovative Teaching */}
-                    <div style={{ marginBottom: 16, order: 3 }}>
-                      <SubsectionTitle icon="lightbulb">A3. Innovative Teaching-Learning Methods - Max 20 marks</SubsectionTitle>
-                      <table style={T}>
-                        <thead><tr>
-                          <th style={{ ...TH, width: 30 }}>SN</th>
-                          <th style={TH}>Methods Used</th>
-                          <th style={TH}>Proof Attached (Yes/No)</th>
-                          <th style={TH}>Attachment</th>
-                          <th style={TH}>View Docs</th>
-                          <th style={TH}>Score</th>
-                        </tr></thead>
-                        <tbody>
-                          {innovRows.map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}>
-                                <select
-                                  value={r.method || ""}
-                                  onChange={(e) => {
-                                    const nextMethod = e.target.value;
-                                    setInnov(i, "method", nextMethod);
-                                    if (nextMethod !== OTHER_INNOVATIVE_METHOD) setInnov(i, "methodOther", "");
-                                  }}
-                                  style={{ width: "100%", height: 30, border: "1px solid #cbd5e1", borderRadius: 4, background: "#fff", fontFamily: "inherit", fontSize: 11 }}
-                                >
-                                  <option value="">Select Method</option>
-                                  {r.method && !LEGACY_INNOVATIVE_METHODS.has(r.method) && <option value={r.method}>{r.method}</option>}
-                                  {innovativeMethodOptionsForRow(r.method).map((option) => (
-                                    <option key={option.value} value={option.value}>{option.label}</option>
-                                  ))}
-                                </select>
-                                {r.method === OTHER_INNOVATIVE_METHOD && (
-                                  <input
-                                    type="text"
-                                    value={r.methodOther || ""}
-                                    onChange={(e) => setInnov(i, "methodOther", e.target.value)}
-                                    placeholder="Mention the name of the innovative method"
-                                    style={{ width: "100%", height: 30, border: "1px solid #cbd5e1", borderRadius: 4, background: "#fff", fontFamily: "inherit", fontSize: 11, marginTop: 6, padding: "0 8px", boxSizing: "border-box" }}
-                                  />
-                                )}
-                              </td>
-                               <td style={TD}>
-                                 <select
-                                   value={r.details || ""}
-                                   onChange={(e) => setInnov(i, "details", e.target.value)}
-                                   style={{ width: "100%", height: 30, border: "1px solid #cbd5e1", borderRadius: 4, background: "#fff", fontFamily: "inherit", fontSize: 11 }}
-                                 >
-                                   <option value="">Select</option>
-                                   <option value="Yes">Yes</option>
-                                   <option value="No">No</option>
-                                 </select>
-                               </td>
-                              <td style={TD}><DocCell id={`innov-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`innov-${i}`} docs={docs} /></td>
-                              <td style={TDS}><TI val={r.score} onChange={(v) => setInnov(i, "score", v === "" ? "" : String(clampScore(v, A3_INNOVATIVE_ROW_MAX)))} numeric max={A3_INNOVATIVE_ROW_MAX} center /></td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#eff6ff" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={5}>Total Score (Max 20)</td>
-                            <td style={{ ...TDS, fontWeight: "bold", color: "#1e3a5f" }}>{innovTotal.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setInnovRows((p) => p.length < A3_METHODS_ROW_LIMIT ? [...p, blankInnovativeRow()] : p)} onDel={() => setInnovRows((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={innovRows.length > 1} canAdd={innovRows.length < A3_METHODS_ROW_LIMIT} />
-                      {innovRows.length >= A3_METHODS_ROW_LIMIT && (
-                        <div style={{ fontSize: 11, color: "#ef4444", marginTop: 4 }}>Maximum {A3_METHODS_ROW_LIMIT} methods can be claimed.</div>
-                      )}
-                    </div>
-
-                    {/* A4. Student Feedback */}
-                    <div style={{ marginBottom: 16, order: 4 }}>
-                      <SubsectionTitle icon="chart">A4. Student Feedback Score - Max 10 marks</SubsectionTitle>
-                      <table style={{ ...T, tableLayout: "fixed" }}>
-                        <colgroup>
-                          <col style={{ width: "6%" }} />
-                          <col style={{ width: "32%" }} />
-                          <col style={{ width: "18%" }} />
-                          <col style={{ width: "18%" }} />
-                          <col style={{ width: "13%" }} />
-                          <col style={{ width: "13%" }} />
-                        </colgroup>
-                        <thead>
-                          <tr>
-                            <th style={TH}>SN</th>
-                            <th style={TH}>Course Code / Name</th>
-                            <th style={TH}>First Student Feedback As per Juno</th>
-                            <th style={TH}>Second Student Feedback As Per Juno</th>
-                            <th style={TH}>Average</th>
-                            <th style={TH}>Score</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {feedback.map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}><TI val={r.code} onChange={(v) => setFb(i, "code", v)} textOnly placeholder="Course code / name" /></td>
-                              <td style={TDC}><TI val={r.fb1} onChange={(v) => setFb(i, "fb1", v)} center numeric max={5} deferClampWhileTyping placeholder="0-5" /></td>
-                              <td style={TDC}><TI val={r.fb2} onChange={(v) => setFb(i, "fb2", v)} center numeric max={5} deferClampWhileTyping placeholder="0-5" /></td>
-                              <td style={{ ...TDC, fontWeight: 700, color: "#0ea5e9" }}>{r.fb1 || r.fb2 ? feedbackAverage(r).toFixed(2) : ""}</td>
-                              <td style={{ ...TDS, fontWeight: 800 }}>{r.fb1 || r.fb2 ? r.score || "0" : ""}</td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#eff6ff" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={5}>Total Score (Max 10)</td>
-                            <td style={{ ...TDS, fontWeight: "bold" }}>{stuFeedbackScore.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setFeedback((p) => [...p, { code: "", fb1: "", fb2: "", score: "" }])} onDel={() => setFeedback((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={feedback.length > 1} />
-                    </div>
-
-                    {/* A5. OBE Practice */}
-                    <div style={{ marginBottom: 16, order: 5 }}>
-                      <SubsectionTitle icon="obe">A5. Learning Outcomes Attainment & OBE Practice - Max 20 marks</SubsectionTitle>
-                      <table style={T}>
-                        <thead>
-                          <tr>
-                            <th style={{ ...TH, width: 30 }}>SN</th>
-                            <th style={TH}>Component</th>
-                            <th style={TH}>Evidence Attached (Yes/No)</th>
-                            <th style={TH}>Attachment</th>
-                            <th style={TH}>View Docs</th>
-                            <th style={TH}>Score</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {obeRows.map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}><TI val={r.component} onChange={(v) => setObe(i, "component", v)} placeholder="CO-PO / attainment / corrective action" /></td>
-                               <td style={TD}>
-                                 <select
-                                   value={r.evidence || ""}
-                                   onChange={(e) => setObe(i, "evidence", e.target.value)}
-                                   style={{ width: "100%", height: 30, border: "1px solid #cbd5e1", borderRadius: 4, background: "#fff", fontFamily: "inherit", fontSize: 11 }}
-                                 >
-                                   <option value="">Select</option>
-                                   <option value="Yes">Yes</option>
-                                   <option value="No">No</option>
-                                 </select>
-                               </td>
-                              <td style={TD}><DocCell id={`obe-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`obe-${i}`} docs={docs} /></td>
-                              <td style={TDS}><TI val={r.score} onChange={(v) => setObe(i, "score", v)} center numeric max={r.max || A5_OBE_MAX} /></td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#eff6ff" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={5}>Total Score (Max 20)</td>
-                            <td style={{ ...TDS, fontWeight: "bold" }}>{obeScore.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setObeRows((p) => [...p, { component: "", evidence: "", score: "", max: A5_OBE_MAX }])} onDel={() => setObeRows((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={obeRows.length > 1} />
-                    </div>
-
-                    {/* A6. Guided Students Project */}
-                    <div style={{ marginBottom: 16, order: 6 }}>
-                      <SubsectionTitle icon="guidance">A6. Student Project Guidance - Max 20 marks</SubsectionTitle>
-                      <>
-                        <table style={T}>
-                          <thead>
-                            <tr>
-                              <th style={{ ...TH, width: 30 }}>SN</th>
-                              <th style={TH}>Project Title / Batch</th>
-                              <th style={TH}>No. of Students</th>
-                              <th style={TH}>Industry Collab (Y/N)</th>
-                              <th style={TH}>Award (Y/N)</th>
-                              <th style={TH}>Student Pub (Y/N)</th>
-                              <th style={TH}>Attachment</th>
-                              <th style={TH}>View Docs</th>
-                              <th style={TH}>Score</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {projects.map((r, i) => (
-                              <tr key={i}>
-                                <td style={TDC}>{i + 1}</td>
-                                <td style={TD}>
-                                  <TI 
-                                    val={r.label} 
-                                    onChange={(v) => setProj(i, "label", v)} 
-                                    placeholder="Project Title / Batch" 
-                                  />
-                                </td>
-                                <td style={TDC}><TI val={r.studentsCount} onChange={(v) => setProj(i, "studentsCount", v)} center numeric integer placeholder="No." /></td>
-                                <td style={TDC}>
-                                  <select value={r.industryCollab || ""} onChange={(e) => setProj(i, "industryCollab", e.target.value)} style={{ width: "100%", height: 28, border: "1px solid #cbd5e1", borderRadius: 4, fontSize: 11 }}>
-                                    <option value="">Select</option>
-                                    <option value="Yes">Yes</option>
-                                    <option value="No">No</option>
-                                  </select>
-                                </td>
-                                <td style={TDC}>
-                                  <select value={r.awardReceived || ""} onChange={(e) => setProj(i, "awardReceived", e.target.value)} style={{ width: "100%", height: 28, border: "1px solid #cbd5e1", borderRadius: 4, fontSize: 11 }}>
-                                    <option value="">Select</option>
-                                    <option value="Yes">Yes</option>
-                                    <option value="No">No</option>
-                                  </select>
-                                </td>
-                                <td style={TDC}>
-                                  <select value={r.studentPub || ""} onChange={(e) => setProj(i, "studentPub", e.target.value)} style={{ width: "100%", height: 28, border: "1px solid #cbd5e1", borderRadius: 4, fontSize: 11 }}>
-                                    <option value="">Select</option>
-                                    <option value="Yes">Yes</option>
-                                    <option value="No">No</option>
-                                  </select>
-                                </td>
-                                <td style={TD}><DocCell id={`proj-${i}`} docs={docs} setDocs={setDocs} /></td>
-                                <td style={TD}><ViewCell id={`proj-${i}`} docs={docs} /></td>
-                                <td style={TDS}><TI val={r.score} onChange={(v) => setProj(i, "score", v)} center numeric max={A6_PROJECT_GUIDANCE_MAX} /></td>
-                              </tr>
-                            ))}
-                            <tr style={{ background: "#eff6ff" }}>
-                              <td style={{ ...TDC, fontWeight: "bold" }} colSpan={8}>Total Score (Max 20)</td>
-                              <td style={{ ...TDS, fontWeight: "bold" }}>{projectTotal.toFixed(1)}</td>
-                            </tr>
-                          </tbody>
-                        </table>
-                        <RowBtns onAdd={() => setProjects((p) => [...p, { label: "", studentsCount: "", industryCollab: "", awardReceived: "", studentPub: "", score: "" }])} onDel={() => setProjects((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={projects.length > 1} />
-                      </>
-                    </div>
-
-                    {/* A7. Mentoring */}
-                    <div style={{ marginBottom: 16, order: 7 }}>
-                      <SubsectionTitle icon="mentoring">A7. Student Mentoring & Counselling - Max 10 marks</SubsectionTitle>
-                      <table style={T}>
-                        <thead>
-                          <tr>
-                            <th style={{ ...TH, width: 30 }}>SN</th>
-                            <th style={TH}>Activity</th>
-                            <th style={TH}>Evidence Attached (Yes/No)</th>
-                            <th style={TH}>Attachment</th>
-                            <th style={TH}>View Docs</th>
-                            <th style={TH}>Score</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {mentoringRows.map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}><TI val={r.activity} onChange={(v) => setMentoring(i, "activity", v)} placeholder="Meeting / register / counselling outcome" /></td>
-                              <td style={TD}>
-                                <select
-                                  value={r.evidence || ""}
-                                  onChange={(e) => setMentoring(i, "evidence", e.target.value)}
-                                  style={{ width: "100%", height: 30, border: "1px solid #cbd5e1", borderRadius: 4, background: "#fff", fontFamily: "inherit", fontSize: 11 }}
-                                >
-                                  <option value="">Select</option>
-                                  <option value="Yes">Yes</option>
-                                  <option value="No">No</option>
-                                </select>
-                              </td>
-                              <td style={TD}><DocCell id={`mentor-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`mentor-${i}`} docs={docs} /></td>
-                              <td style={TDS}><TI val={r.score} onChange={(v) => setMentoring(i, "score", v)} center numeric max={r.max || A7_MENTORING_MAX} /></td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#eff6ff" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={5}>Total Score (Max 10)</td>
-                            <td style={{ ...TDS, fontWeight: "bold" }}>{mentoringScore.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setMentoringRows((p) => [...p, { activity: "", evidence: "", score: "", max: A7_MENTORING_MAX }])} onDel={() => setMentoringRows((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={mentoringRows.length > 1} />
-                    </div>
-
-                    {/* A8. Qualifications */}
-                    <div style={{ marginBottom: 16, order: 8 }}>
-                      <SubsectionTitle icon="award">A8. Professional Development & Qualification Enhancement - Max 10 marks</SubsectionTitle>
-                      <table style={T}>
-                        <thead>
-                          <tr>
-                            <th style={{ ...TH, width: 30 }}>SN</th>
-                            <th style={TH}>Qualification / Certification Title</th>
-                            <th style={TH}>Awarding Body</th>
-                            <th style={TH}>Date</th>
-                            <th style={TH}>Attachment</th>
-                            <th style={TH}>View Docs</th>
-                            <th style={TH}>Score</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {quals.map((r, i) => (
-                            <tr key={i}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}>
-                                <TI 
-                                  val={r.label} 
-                                  onChange={(v) => setQual(i, "label", v)} 
-                                  placeholder="Higher qualification / Certification Title" 
-                                />
-                              </td>
-                              <td style={TD}><TI val={r.awardingBody} onChange={(v) => setQual(i, "awardingBody", v)} placeholder="Awarding Body" /></td>
-                              <td style={TDC}><TI val={r.date} onChange={(v) => setQual(i, "date", maskDateDDMMYYYY(v))} placeholder="DD/MM/YYYY" /></td>
-                              <td style={TD}><DocCell id={`qual-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`qual-${i}`} docs={docs} /></td>
-                              <td style={TDS}><TI val={String(r.score ?? "").trim() ? clampScore(r.score, A8_QUALIFICATION_MAX) : ""} onChange={(v) => setQual(i, "score", v)} center numeric max={A8_QUALIFICATION_MAX} /></td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#eff6ff" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={6}>Total Score (Max 10)</td>
-                            <td style={{ ...TDS, fontWeight: "bold" }}>{qualTotal.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setQuals((p) => [...p, { label: "", awardingBody: "", date: "", score: "" }])} onDel={() => setQuals((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={quals.length > 1} />
-                    </div>
-                  </SC>
+                {submitted && (
+                  <div style={{ marginTop: 10, fontSize: 12, color: "#0f766e", fontWeight: 700 }}>
+                    Declaration recorded for this session. Backend submission for the DYPATU SAR form is not yet wired up — this does not send your appraisal to HOD/Dean review.
+                  </div>
                 )}
-
-                {/* Part C Tab */}
-                {!isLegacyTwoPartYear && hodAppraisalTab === "partC" && (
-                  <SC title={`Part C - Administrative Role & University Development Contribution (Max ${PART_C_MAX})`} accent="#0f766e" scoreBadge={`${partCTotal.toFixed(1)} / ${PART_C_MAX}`}>
-                    <div style={{ marginBottom: 14, padding: "8px 12px", background: "#ccfbf1", borderRadius: 6, fontSize: 12, color: "#115e59", fontWeight: 600 }}>
-                      Total Part C Score: {partCTotal.toFixed(1)}/{PART_C_MAX}
-                    </div>
-
-                    <div style={{ marginBottom: 16 }}>
-                      <SubsectionTitle icon="building">C1. Administration at University Level - Max 50 marks</SubsectionTitle>
-                      <table style={T}>
-                        <thead><tr>
-                          <th style={{ ...TH, width: 30 }}>Sr. No.</th>
-                          <th style={TH}>Activity / Responsibility</th>
-                          <th style={TH}>Duration Category</th>
-                          <th style={TH}>Period</th>
-                          <th style={TH}>Attachment</th>
-                          <th style={TH}>View Docs</th>
-                          <th style={TH}>Faculty Score</th>
-                        </tr></thead>
-                        <tbody>
-                          {uniActs.map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}><TI val={r.activity} onChange={(v) => setUni(i, "activity", v)} placeholder="Committee / cell / university responsibility" /></td>
-                              <td style={TD}><TI val={r.nature} onChange={(v) => setUni(i, "nature", v)} placeholder="Full year / semester / event based" /></td>
-                              <td style={TD}><TI val={r.period} onChange={(v) => setUni(i, "period", v)} placeholder="e.g. Jul 2026 - Dec 2026" /></td>
-                              <td style={TD}><DocCell id={`uni-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`uni-${i}`} docs={docs} /></td>
-                              <td style={TDS}><TI val={r.score} onChange={(v) => setUni(i, "score", v)} center numeric max={C1_UNIVERSITY_ADMIN_MAX} /></td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#ccfbf1" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={6}>Total (Max 50)</td>
-                            <td style={{ ...TDS, fontWeight: "bold" }}>{uniScore.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setUniActs((p) => [...p, { activity: "", nature: "", period: "", score: "" }])} onDel={() => setUniActs((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={uniActs.length > 1} />
-                    </div>
-
-                    <div style={{ marginBottom: 16 }}>
-                      <SubsectionTitle icon="school">C2. Administration at School Level - Max 30 marks</SubsectionTitle>
-                      <table style={T}>
-                        <thead><tr>
-                          <th style={{ ...TH, width: 30 }}>Sr. No.</th>
-                          <th style={TH}>Activity / Responsibility</th>
-                          <th style={TH}>Duration Category</th>
-                          <th style={TH}>Period</th>
-                          <th style={TH}>Attachment</th>
-                          <th style={TH}>View Docs</th>
-                          <th style={TH}>Faculty Score</th>
-                        </tr></thead>
-                        <tbody>
-                          {deptActs.map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}><TI val={r.activity} onChange={(v) => setDept(i, "activity", v)} placeholder="School committee / coordinator role" /></td>
-                              <td style={TD}><TI val={r.nature} onChange={(v) => setDept(i, "nature", v)} placeholder="Full year / semester / event based" /></td>
-                              <td style={TD}><TI val={r.period} onChange={(v) => setDept(i, "period", v)} placeholder="e.g. AY 2026-2027" /></td>
-                              <td style={TD}><DocCell id={`dept-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`dept-${i}`} docs={docs} /></td>
-                              <td style={TDS}><TI val={r.score} onChange={(v) => setDept(i, "score", v)} center numeric max={C2_SCHOOL_ADMIN_MAX} /></td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#ccfbf1" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={6}>Total (Max 30)</td>
-                            <td style={{ ...TDS, fontWeight: "bold" }}>{deptScore.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setDeptActs((p) => [...p, { activity: "", nature: "", period: "", score: "" }])} onDel={() => setDeptActs((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={deptActs.length > 1} />
-                    </div>
-
-                    <div style={{ marginBottom: 16 }}>
-                      <SubsectionTitle icon="event">C3. Event Organisation & Institutional Visibility - Max 20 marks</SubsectionTitle>
-                      <table style={T}>
-                        <thead><tr>
-                          <th style={{ ...TH, width: 30 }}>Sr. No.</th>
-                          <th style={TH}>Event / Contribution</th>
-                          <th style={TH}>Role</th>
-                          <th style={TH}>Date</th>
-                          <th style={TH}>Level</th>
-                          <th style={TH}>Attachment</th>
-                          <th style={TH}>View Docs</th>
-                          <th style={TH}>Faculty Score</th>
-                        </tr></thead>
-                        <tbody>
-                          {eventRows.map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}><TI val={r.event} onChange={(v) => setEvent(i, "event", v)} placeholder="Event / conference / workshop name" /></td>
-                              <td style={TD}><TI val={r.role} onChange={(v) => setEvent(i, "role", v)} placeholder="Convener / coordinator / member" /></td>
-                              <td style={TD}><TI val={r.date} onChange={(v) => setEvent(i, "date", maskDateDDMMYYYY(v))} placeholder="DD/MM/YYYY" /></td>
-                              <td style={TD}>
-                                 <select
-                                   value={r.level || ""}
-                                   onChange={(e) => setEvent(i, "level", e.target.value)}
-                                   style={{ width: "100%", height: 30, border: "1px solid #cbd5e1", borderRadius: 4, background: "#fff", fontSize: 11, fontFamily: "inherit" }}
-                                 >
-                                   <option value="">Select Level</option>
-                                   <option value="University">University</option>
-                                   <option value="National">National</option>
-                                   <option value="International">International</option>
-                                 </select>
-                               </td>
-                              <td style={TD}><DocCell id={`event-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`event-${i}`} docs={docs} /></td>
-                              <td style={TDS}><TI val={r.score} onChange={(v) => setEvent(i, "score", v)} center numeric max={C3_EVENT_MAX} /></td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#ccfbf1" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={7}>Total (Max 20)</td>
-                            <td style={{ ...TDS, fontWeight: "bold" }}>{eventScore.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setEventRows((p) => [...p, { event: "", role: "", date: "", level: "", score: "" }])} onDel={() => setEventRows((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={eventRows.length > 1} />
-                    </div>
-
-                    <div style={{ marginBottom: 16 }}>
-                      <SubsectionTitle icon="outreach">C4. Outreach, Extension & Social Responsibility - Max 10 marks</SubsectionTitle>
-                      <>
-                        <table style={T}>
-                          <thead><tr>
-                            <th style={{ ...TH, width: 30 }}>Sr. No.</th>
-                            <th style={TH}>Activity</th>
-                            <th style={TH}>Details</th>
-                            <th style={TH}>Date</th>
-                            <th style={TH}>Attachment</th>
-                            <th style={TH}>View Docs</th>
-                            <th style={TH}>Faculty Score</th>
-                          </tr></thead>
-                          <tbody>
-                            {society.map((r, i) => {
-                              const socLocked = societyRowLocked(r);
-                              return (
-                                <tr key={i} style={socLocked ? { background: "#f1f5f9", opacity: 0.65 } : i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                                  <td style={TDC}>{i + 1}</td>
-                                  <td style={TD}><TI val={r.label} onChange={(v) => setSoc(i, "label", v)} placeholder="Outreach / NSS / extension activity" readOnly={socLocked} /></td>
-                                  <td style={TD}><TI val={r.details} onChange={(v) => setSoc(i, "details", v)} placeholder="Beneficiaries, location, outcome" readOnly={socLocked} /></td>
-                                  <td style={TD}><TI val={r.date} onChange={(v) => setSoc(i, "date", maskDateDDMMYYYY(v))} placeholder="DD/MM/YYYY" readOnly={socLocked} /></td>
-                                  <td style={TD}><DocCell id={`soc-${i}`} docs={docs} setDocs={setDocs} readOnly={socLocked} /></td>
-                                  <td style={TD}><ViewCell id={`soc-${i}`} docs={docs} /></td>
-                                  <td style={TDS}><TI val={r.score} onChange={(v) => setSoc(i, "score", v === "" ? "" : String(clampScore(v, C4_OUTREACH_MAX)))} numeric max={C4_OUTREACH_MAX} center readOnly={socLocked} /></td>
-                                </tr>
-                              );
-                            })}
-                            <tr style={{ background: "#ccfbf1" }}>
-                              <td style={{ ...TDC, fontWeight: "bold" }} colSpan={6}>Total (Max 10)</td>
-                              <td style={{ ...TDS, fontWeight: "bold" }}>{societyScore.toFixed(1)}</td>
-                            </tr>
-                          </tbody>
-                        </table>
-                        <RowBtns onAdd={() => setSociety((p) => [...p, { label: "", details: "", date: "", score: "", max: C4_OUTREACH_MAX }])} onDel={() => setSociety((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={society.length > 1} />
-                      </>
-                    </div>
-
-                    <div style={{ marginBottom: 16 }}>
-                      <SubsectionTitle icon="industry">C5. Industry Interaction & Linkages - Max 10 marks</SubsectionTitle>
-                      <table style={T}>
-                        <thead><tr>
-                          <th style={{ ...TH, width: 30 }}>Sr. No.</th>
-                          <th style={TH}>Activity (MOU / CoE / Drive / Programme)</th>
-                          <th style={TH}>Industry Partner</th>
-                          <th style={TH}>Date</th>
-                          <th style={TH}>Attachment</th>
-                          <th style={TH}>View Docs</th>
-                          <th style={TH}>Faculty Score</th>
-                        </tr></thead>
-                        <tbody>
-                          {industry.map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}><TI val={r.activity || r.name || ""} onChange={(v) => setInd(i, "activity", v)} placeholder="MOU / CoE / drive / guest lecture" /></td>
-                              <td style={TD}><TI val={r.partner || r.details || ""} onChange={(v) => setInd(i, "partner", v)} placeholder="Industry partner name" /></td>
-                              <td style={TD}><TI val={r.date} onChange={(v) => setInd(i, "date", maskDateDDMMYYYY(v))} placeholder="DD/MM/YYYY" /></td>
-                              <td style={TD}><DocCell id={`ind-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`ind-${i}`} docs={docs} /></td>
-                              <td style={TDS}><TI val={r.score} onChange={(v) => setInd(i, "score", v)} center numeric max={C5_INDUSTRY_MAX} /></td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#ccfbf1" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={6}>Total (Max 10)</td>
-                            <td style={{ ...TDS, fontWeight: "bold" }}>{industryScore.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setIndustry((p) => [...p, { activity: "", partner: "", date: "", score: "" }])} onDel={() => setIndustry((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={industry.length > 1} />
-                    </div>
-
-                    <div style={{ marginBottom: 16 }}>
-                      <SubsectionTitle icon="alumni">C6. Alumni Engagement & Networking - Max 10 marks</SubsectionTitle>
-                      <table style={T}>
-                        <thead><tr>
-                          <th style={{ ...TH, width: 30 }}>Sr. No.</th>
-                          <th style={TH}>Activity</th>
-                          <th style={TH}>Details</th>
-                          <th style={TH}>Date</th>
-                          <th style={TH}>Attachment</th>
-                          <th style={TH}>View Docs</th>
-                          <th style={TH}>Faculty Score</th>
-                        </tr></thead>
-                        <tbody>
-                          {alumniRows.map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}><TI val={r.activity} onChange={(v) => setAlumni(i, "activity", v)} placeholder="Alumni talk / meet / mentoring" /></td>
-                              <td style={TD}><TI val={r.details} onChange={(v) => setAlumni(i, "details", v)} placeholder="Alumni name, batch, outcome" /></td>
-                              <td style={TD}><TI val={r.date} onChange={(v) => setAlumni(i, "date", maskDateDDMMYYYY(v))} placeholder="DD/MM/YYYY" /></td>
-                              <td style={TD}><DocCell id={`alumni-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`alumni-${i}`} docs={docs} /></td>
-                              <td style={TDS}><TI val={r.score} onChange={(v) => setAlumni(i, "score", v)} center numeric max={C6_ALUMNI_MAX} /></td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#ccfbf1" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={6}>Total (Max 10)</td>
-                            <td style={{ ...TDS, fontWeight: "bold" }}>{alumniScore.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setAlumniRows((p) => [...p, { activity: "", details: "", date: "", score: "" }])} onDel={() => setAlumniRows((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={alumniRows.length > 1} />
-                    </div>
-
-                    <div style={{ marginBottom: 16 }}>
-                      <SubsectionTitle icon="placement">C7. Student Placement Mentoring & Career Development - Max 20 marks</SubsectionTitle>
-                      <table style={T}>
-                        <thead><tr>
-                          <th style={{ ...TH, width: 30 }}>Sr. No.</th>
-                          <th style={TH}>Activity Type</th>
-                          <th style={TH}>Student / Company Name</th>
-                          <th style={TH}>Date</th>
-                          <th style={TH}>Attachment</th>
-                          <th style={TH}>View Docs</th>
-                          <th style={TH}>Faculty Score</th>
-                        </tr></thead>
-                        <tbody>
-                          {placementRows.map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}><TI val={r.activityType} onChange={(v) => setPlacement(i, "activityType", v)} placeholder="Mock interview / placement mentoring" /></td>
-                              <td style={TD}><TI val={r.name} onChange={(v) => setPlacement(i, "name", v)} placeholder="Student / company name" /></td>
-                              <td style={TD}><TI val={r.date} onChange={(v) => setPlacement(i, "date", maskDateDDMMYYYY(v))} placeholder="DD/MM/YYYY" /></td>
-                              <td style={TD}><DocCell id={`placement-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`placement-${i}`} docs={docs} /></td>
-                              <td style={TDS}><TI val={r.score} onChange={(v) => setPlacement(i, "score", v)} center numeric max={C7_PLACEMENT_MAX} /></td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#ccfbf1" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={6}>Total (Max 20)</td>
-                            <td style={{ ...TDS, fontWeight: "bold" }}>{placementScore.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setPlacementRows((p) => [...p, { activityType: "", name: "", date: "", score: "" }])} onDel={() => setPlacementRows((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={placementRows.length > 1} />
-                    </div>
-                  </SC>
+                {!submitted && (
+                  <div style={{ marginTop: 10, fontSize: 11.5, color: "#94a3b8", fontWeight: 600 }}>
+                    Tick the declaration above to enable Submit.
+                  </div>
                 )}
-
-                {/* Part D Tab */}
-                {!isLegacyTwoPartYear && hodAppraisalTab === "partD" && (
-                  <SC title={`Part D - Leave & Attendance Management (Max ${PART_D_MAX})`} accent="#0891b2" scoreBadge={`${partDTotal.toFixed(1)} / ${PART_D_MAX}`}>
-                    <div style={{ marginBottom: 14, padding: "8px 12px", background: "#ecfeff", borderRadius: 6, fontSize: 12, color: "#155e75", fontWeight: 600 }}>
-                      1. Unacceptable (0-5) &nbsp; 2. Below Average (6-10) &nbsp; 3. Average (11-15) &nbsp; 4. Above Average (16-20) &nbsp; 5. Outstanding (Above 20)
-                    </div>
-                    {leaveManagement.map((r, i) => {
-                      const totalTaken = n(r.clTaken) + n(r.mlTaken) + n(r.odTaken) + n(r.coffTaken);
-                      const totalOutOf = n(r.clOutOf) + n(r.mlOutOf) + n(r.odOutOf) + n(r.coffOutOf);
-                      return (
-                        <div key={i} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                          <table style={{ ...T, minWidth: 0, tableLayout: "fixed" }}>
-                            <colgroup>
-                              <col style={{ width: "28%" }} />
-                              <col style={{ width: "16%" }} />
-                              <col style={{ width: "16%" }} />
-                              <col style={{ width: "16%" }} />
-                              <col style={{ width: "16%" }} />
-                              <col style={{ width: "8%" }} />
-                            </colgroup>
-                            <thead><tr>
-                              <th style={{ ...TH, textAlign: "left" }}>1. No. of leaves taken in the Year</th>
-                              <th style={TH}>CL</th>
-                              <th style={TH}>ML</th>
-                              <th style={TH}>OD</th>
-                              <th style={TH}>C/Off</th>
-                              <th style={TH}>Total</th>
-                            </tr></thead>
-                            <tbody>
-                              <tr>
-                                <td style={TD} />
-                                <td style={TDS}><TI val={r.clTaken} onChange={(v) => setLeaveMgmt(i, "clTaken", v)} center numeric /></td>
-                                <td style={TDS}><TI val={r.mlTaken} onChange={(v) => setLeaveMgmt(i, "mlTaken", v)} center numeric /></td>
-                                <td style={TDS}><TI val={r.odTaken} onChange={(v) => setLeaveMgmt(i, "odTaken", v)} center numeric /></td>
-                                <td style={TDS}><TI val={r.coffTaken} onChange={(v) => setLeaveMgmt(i, "coffTaken", v)} center numeric /></td>
-                                <td style={{ ...TDC, fontWeight: 700 }}>{totalTaken || ""}</td>
-                              </tr>
-                              <tr style={{ background: "#f8fafc" }}>
-                                <td style={{ ...TD, fontWeight: 700 }}>Out of</td>
-                                <td style={TDS}><TI val={r.clOutOf} onChange={(v) => setLeaveMgmt(i, "clOutOf", v)} center numeric /></td>
-                                <td style={TDS}><TI val={r.mlOutOf} onChange={(v) => setLeaveMgmt(i, "mlOutOf", v)} center numeric /></td>
-                                <td style={TDS}><TI val={r.odOutOf} onChange={(v) => setLeaveMgmt(i, "odOutOf", v)} center numeric /></td>
-                                <td style={TDS}><TI val={r.coffOutOf} onChange={(v) => setLeaveMgmt(i, "coffOutOf", v)} center numeric /></td>
-                                <td style={{ ...TDC, fontWeight: 700 }}>{totalOutOf || ""}</td>
-                              </tr>
-                            </tbody>
-                          </table>
-                          <table style={{ ...T, minWidth: 0, tableLayout: "fixed" }}>
-                            <colgroup>
-                              <col style={{ width: "58%" }} />
-                              <col style={{ width: "42%" }} />
-                            </colgroup>
-                            <tbody>
-                              <tr>
-                                <td style={{ ...TD, fontWeight: 700 }}>2. No. of Late Remarks in the Year</td>
-                                <td style={TDS}><TI val={r.lateRemarks} onChange={(v) => setLeaveMgmt(i, "lateRemarks", v)} center numeric /></td>
-                              </tr>
-                              <tr style={{ background: "#f8fafc" }}>
-                                <td style={{ ...TD, fontWeight: 700 }}>3. Total Actual Working Days for the current academic year</td>
-                                <td style={TDS}><TI val={r.workingDays} onChange={(v) => setLeaveMgmt(i, "workingDays", v)} center numeric /></td>
-                              </tr>
-                              <tr>
-                                <td style={{ ...TD, fontWeight: 700 }}>4. Management of leaves</td>
-                                <td style={TD}>
-                                  <select
-                                    value={r.managementRating}
-                                    onChange={(e) => setLeaveMgmt(i, "managementRating", e.target.value)}
-                                    style={{ width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
-                                  >
-                                    <option value="">Select rating...</option>
-                                    {PART_D_RATING_OPTIONS.map((option) => (
-                                      <option key={option.value} value={option.value}>{option.label} - {option.score} marks</option>
-                                    ))}
-                                  </select>
-                                </td>
-                              </tr>
-                              <tr style={{ background: "#ecfeff" }}>
-                                <td style={{ ...TD, fontWeight: "bold", textAlign: "right" }}>Total Score out of ({PART_D_MAX}) =</td>
-                                <td style={{ ...TDS, fontWeight: "bold" }}>{r.score || 0}</td>
-                              </tr>
-                            </tbody>
-                          </table>
-                        </div>
-                      );
-                    })}
-                  </SC>
-                )}
-
-                {/* Part E Tab */}
-                {!isLegacyTwoPartYear && hodAppraisalTab === "partE" && (
-                  <SC title={`Part E - Annual Confidential Report (Max ${PART_E_MAX})`} accent="#b45309" scoreBadge={`0.0 / ${PART_E_MAX}`}>
-                    <div style={{ marginBottom: 14, padding: "8px 12px", background: "#fef3c7", borderRadius: 6, fontSize: 12, color: "#92400e", fontWeight: 600 }}>
-                      Evaluated by HOD/Director only. This part has no faculty self-score input.
-                    </div>
-                    <table style={T}>
-                      <thead><tr>
-                        <th style={{ ...TH, width: 30 }}>Sr. No.</th>
-                        <th style={TH}>Parameter</th>
-                        <th style={TH}>Description / Indicators</th>
-                        <th style={TH}>Max Marks</th>
-                      </tr></thead>
-                      <tbody>
-                        {partEParameters.map((row, index) => (
-                          <tr key={row.parameter} style={index % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                            <td style={TDC}>{`E${index + 1}`}</td>
-                            <td style={{ ...TD, fontWeight: 700 }}>{row.parameter}</td>
-                            <td style={TD}>{row.description}</td>
-                            <td style={TDC}>{row.max}</td>
-                          </tr>
-                        ))}
-                        <tr style={{ background: "#fef3c7" }}>
-                          <td style={{ ...TDC, fontWeight: "bold" }} colSpan={3}>Part E Total (Max: {PART_E_MAX})</td>
-                          <td style={{ ...TDS, fontWeight: "bold" }}>{PART_E_MAX}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </SC>
-                )}
-
-                {/* Part B Tab */}
-                {hodAppraisalTab === "partB" && (
-                  <SC title={`Part B - Research & Innovation (Max ${effectivePartBMax})`} accent="#7c3aed" scoreBadge={`${partBTotal.toFixed(1)} / ${effectivePartBMax}`}>
-                    <div style={{ marginBottom: 14, padding: "8px 12px", background: "#ede9fe", borderRadius: 6, fontSize: 12, color: "#6d28d9", fontWeight: 600 }}>
-                      Total Part B Score: {partBTotal.toFixed(1)}/{effectivePartBMax}
-                    </div>
-                    <div style={{ fontSize: 11, color: "#64748b", marginBottom: 12 }}>Enter your research publications, patents, conferences, and other academic contributions.</div>
-
-                    {/* B1. Journal Publications */}
-                    <div style={{ marginBottom: 16, order: 1 }}>
-                      <SubsectionTitle icon="journal">B1. Journal Publications - Max 100 marks</SubsectionTitle>
-                      <table style={T}>
-                        <thead>
-                          <tr>
-                            <th style={{ ...TH, width: 30 }}>SN</th>
-                            <th style={TH}>Title</th>
-                            <th style={TH}>Journal</th>
-                            <th style={TH}>ISSN</th>
-                            <th style={TH}>Impact Factor</th>
-                            <th style={TH}>Author Position</th>
-                            <th style={TH}>Attachment</th>
-                            <th style={TH}>View Docs</th>
-                            <th style={TH}>Score</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {journals.map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}><TI val={r.title} onChange={(v) => setJour(i, "title", v)} textOnly placeholder="Paper title" /></td>
-                              <td style={TD}><TI val={r.journal} onChange={(v) => setJour(i, "journal", v)} placeholder="Journal name, volume, issue" /></td>
-                              <td style={TD}><TI val={r.issn} onChange={(v) => setJour(i, "issn", v)} placeholder="ISSN / e-ISSN" /></td>
-                              <td style={TD}><TI val={r.impactFactor || r.impact} onChange={(v) => setJour(i, "impactFactor", v)} placeholder="Impact Factor" /></td>
-                              <td style={TD}><TI val={r.authorPosition || r.position} onChange={(v) => setJour(i, "authorPosition", v)} placeholder="1st / Corresponding / Co-Author" /></td>
-                              <td style={TD}><DocCell id={`jour-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`jour-${i}`} docs={docs} /></td>
-                              <td style={TDS}><TI val={r.score} onChange={(v) => setJour(i, "score", v)} center numeric max={B1_JOURNAL_MAX} /></td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#f3e8ff" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={8}>Total Score (Max 100)</td>
-                            <td style={{ ...TDS, fontWeight: "bold" }}>{journalScore.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setJournals((p) => [...p, { title: "", journal: "", issn: "", impactFactor: "", authorPosition: "", score: "" }])} onDel={() => setJournals((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={journals.length > 1} />
-                    </div>
-
-                    {/* B2. Books / Chapters */}
-                    <div style={{ marginBottom: 16, order: 2 }}>
-                      <SubsectionTitle icon="book">B2. Books, Book Chapters & Edited Volumes - Max 30 marks</SubsectionTitle>
-                      <table style={T}>
-                        <thead>
-                          <tr>
-                            <th style={{ ...TH, width: 30 }}>SN</th>
-                            <th style={TH}>Title</th>
-                            <th style={TH}>Publisher & ISBN</th>
-                            <th style={TH}>Type</th>
-                            <th style={TH}>Level</th>
-                            <th style={TH}>Co-authors from DYPIU</th>
-                            <th style={TH}>Attachment</th>
-                            <th style={TH}>View Docs</th>
-                            <th style={TH}>Score</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {books.map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}><TI val={r.title} onChange={(v) => setBook(i, "title", v)} textOnly placeholder="Book / chapter title" /></td>
-                              <td style={TD}><TI val={r.book || r.publisherIsbn} onChange={(v) => setBook(i, "book", v)} placeholder="Publisher & ISBN" /></td>
-                              <td style={TD}>
-                                <select
-                                  value={r.pub || r.type || ""}
-                                  onChange={(e) => setBook(i, "pub", e.target.value)}
-                                  style={{ width: "100%", height: 30, border: "1px solid #cbd5e1", borderRadius: 4, background: "#fff", fontSize: 11, fontFamily: "inherit" }}
-                                >
-                                  <option value="">Select Type</option>
-                                  {["Book", "Chapter", "Editor", "Translation"].map((opt) => (
-                                    <option key={opt} value={opt}>{opt}</option>
-                                  ))}
-                                </select>
-                              </td>
-                              <td style={TD}>
-                                <select
-                                  value={r.level || ""}
-                                  onChange={(e) => setBook(i, "level", e.target.value)}
-                                  style={{ width: "100%", height: 30, border: "1px solid #cbd5e1", borderRadius: 4, background: "#fff", fontSize: 11, fontFamily: "inherit" }}
-                                >
-                                  <option value="">Select Level</option>
-                                  {["International", "National", "Local"].map((opt) => (
-                                    <option key={opt} value={opt}>{opt}</option>
-                                  ))}
-                                </select>
-                              </td>
-                              <td style={TD}><TI val={r.coauth} onChange={(v) => setBook(i, "coauth", v)} placeholder="Co-authors from DYPIU" /></td>
-                              <td style={TD}><DocCell id={`book-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`book-${i}`} docs={docs} /></td>
-                              <td style={TDS}><TI val={r.score} onChange={(v) => setBook(i, "score", v)} center numeric max={B2_BOOK_MAX} /></td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#f3e8ff" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={8}>Total Score (Max 30)</td>
-                            <td style={{ ...TDS, fontWeight: "bold" }}>{bookScore.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setBooks((p) => [...p, { title: "", book: "", pub: "", level: "", coauth: "", score: "" }])} onDel={() => setBooks((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={books.length > 1} />
-                    </div>
-
-                    {/* B11. ICT Content, MOOCs & E-Learning */}
-                    <div style={{ marginBottom: 16, order: 11 }}>
-                      <SubsectionTitle icon="monitor">B11. ICT Content, MOOCs & E-Learning - Max 20 marks</SubsectionTitle>
-                      <table style={T}>
-                        <thead>
-                          <tr>
-                            <th style={{ ...TH, width: 30 }}>SN</th>
-                            <th style={TH}>Title</th>
-                            <th style={TH}>Platform / Type</th>
-                            <th style={TH}>Reach / Views (if available)</th>
-                            <th style={TH}>Attachment</th>
-                            <th style={TH}>View Docs</th>
-                            <th style={TH}>Score</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {ict.map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}><TI val={r.title} onChange={(v) => setIctRow(i, "title", v)} textOnly placeholder="Title" /></td>
-                              <td style={TD}><TI val={r.type || r.desc} onChange={(v) => setIctRow(i, "type", v)} placeholder="Platform / Type" /></td>
-                              <td style={TD}><TI val={r.quad || r.reach} onChange={(v) => setIctRow(i, "quad", v)} placeholder="Reach / Views" /></td>
-                              <td style={TD}><DocCell id={`ict-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`ict-${i}`} docs={docs} /></td>
-                              <td style={TDS}><TI val={r.score} onChange={(v) => setIctRow(i, "score", v)} center numeric max={B3_ICT_MAX} /></td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#f3e8ff" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={6}>Total Score (Max 20)</td>
-                            <td style={{ ...TDS, fontWeight: "bold" }}>{ictScore.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setIct((p) => [...p, { title: "", type: "", quad: "", score: "" }])} onDel={() => setIct((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={ict.length > 1} />
-                    </div>
-
-                    {/* B5. Research Guidance */}
-                    <div style={{ marginBottom: 16, order: 5 }}>
-                      <SubsectionTitle icon="research">B5. Research Guidance - Max 20 marks</SubsectionTitle>
-                      <>
-                        <table style={T}>
-                          <thead>
-                            <tr>
-                              <th style={{ ...TH, width: 30 }}>SN</th>
-                              <th style={TH}>Degree (PhD/PG)</th>
-                              <th style={TH}>Name of Student / Scholar</th>
-                              <th style={TH}>Status (Ongoing/Awarded)</th>
-                              <th style={TH}>Date</th>
-                              <th style={TH}>Attachment</th>
-                              <th style={TH}>View Docs</th>
-                              <th style={TH}>Score</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {research.map((r, i) => (
-                              <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                                <td style={TDC}>{i + 1}</td>
-                                <td style={TD}>
-                                  <select
-                                    value={r.degree || ""}
-                                    onChange={(event) => setRes(i, "degree", event.target.value)}
-                                    style={{ width: "100%", height: 30, border: "1px solid #cbd5e1", borderRadius: 4, background: "#fff", fontSize: 11, fontFamily: "inherit" }}
-                                  >
-                                    <option value="">Select</option>
-                                    <option value="PhD">PhD</option>
-                                    <option value="PG">PG</option>
-                                  </select>
-                                </td>
-                                <td style={TD}><TI val={r.name} onChange={(v) => setRes(i, "name", v)} textOnly placeholder="Name of Student / Scholar" /></td>
-                                <td style={TD}>
-                                  <select
-                                    value={r.status || r.thesis || ""}
-                                    onChange={(event) => {
-                                      const nextStatus = event.target.value;
-                                      setRes(i, "status", nextStatus);
-                                      if (nextStatus === "Ongoing") setRes(i, "date", "");
-                                    }}
-                                    style={{ width: "100%", height: 30, border: "1px solid #cbd5e1", borderRadius: 4, background: "#fff", fontSize: 11, fontFamily: "inherit" }}
-                                  >
-                                    <option value="">Select</option>
-                                    <option value="Ongoing">Ongoing</option>
-                                    <option value="Awarded">Awarded</option>
-                                  </select>
-                                </td>
-                                <td style={TD}><TI val={r.date} onChange={(v) => setRes(i, "date", maskDateDDMMYYYY(v))} placeholder={r.status === "Ongoing" ? "Not required" : "DD/MM/YYYY"} readOnly={r.status === "Ongoing"} /></td>
-                                <td style={TD}><DocCell id={`res-${i}`} docs={docs} setDocs={setDocs} /></td>
-                                <td style={TD}><ViewCell id={`res-${i}`} docs={docs} /></td>
-                                <td style={TDS}><TI val={r.score} onChange={(v) => setRes(i, "score", v)} center numeric max={b5RowMax(r)} /></td>
-                              </tr>
-                            ))}
-                            <tr style={{ background: "#f3e8ff" }}>
-                              <td style={{ ...TDC, fontWeight: "bold" }} colSpan={7}>Total Score (Max 20)</td>
-                              <td style={{ ...TDS, fontWeight: "bold" }}>{researchScore.toFixed(1)}</td>
-                            </tr>
-                          </tbody>
-                        </table>
-                        <RowBtns onAdd={() => setResearch((p) => [...p, { degree: "PhD", name: "", status: "", date: "", score: "" }])} onDel={() => setResearch((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={research.length > 1} />
-                      </>
-                    </div>
-
-                    {/* B4. External Funded Research Projects */}
-                    <div style={{ marginBottom: 16, order: 4 }}>
-                      <SubsectionTitle icon="fundedProject">B4. External Funded Research Projects - Max 40 marks</SubsectionTitle>
-                      <table style={T}>
-                        <thead>
-                          <tr>
-                            <th style={{ ...TH, width: 30 }}>SN</th>
-                            <th style={TH}>Title of Project</th>
-                            <th style={TH}>Funding Agency</th>
-                            <th style={TH}>Sanction Date</th>
-                            <th style={TH}>Amount (₹)</th>
-                            <th style={TH}>PI / Co-PI</th>
-                            <th style={TH}>Status</th>
-                            <th style={TH}>Attachment</th>
-                            <th style={TH}>View Docs</th>
-                            <th style={TH}>Score</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {projects2.map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}><TI val={r.title} onChange={(v) => setPrj2(i, "title", v)} textOnly placeholder="Project title" /></td>
-                              <td style={TD}><TI val={r.agency} onChange={(v) => setPrj2(i, "agency", v)} textOnly placeholder="Funding agency" /></td>
-                              <td style={TD}><TI val={r.date} onChange={(v) => setPrj2(i, "date", maskDateDDMMYYYY(v))} placeholder="DD/MM/YYYY" /></td>
-                              <td style={TD}><TI val={r.amount} onChange={(v) => setPrj2(i, "amount", v)} integer placeholder="Amount in INR" /></td>
-                              <td style={TD}>
-                                <select
-                                  value={r.role || ""}
-                                  onChange={(e) => setPrj2(i, "role", e.target.value)}
-                                  style={{ width: "100%", height: 30, border: "1px solid #cbd5e1", borderRadius: 4, background: "#fff", fontSize: 11, fontFamily: "inherit" }}
-                                >
-                                  <option value="">Select Role</option>
-                                  {["PI", "Co-PI", "Consultant", "Project Director"].map((opt) => (
-                                    <option key={opt} value={opt}>{opt}</option>
-                                  ))}
-                                </select>
-                              </td>
-                              <td style={TD}>
-                                <select
-                                  value={r.status || ""}
-                                  onChange={(e) => setPrj2(i, "status", e.target.value)}
-                                  style={{ width: "100%", height: 30, border: "1px solid #cbd5e1", borderRadius: 4, background: "#fff", fontSize: 11, fontFamily: "inherit" }}
-                                >
-                                  <option value="">Select Status</option>
-                                  {["Ongoing", "Completed", "Sanctioned", "Submitted"].map((opt) => (
-                                    <option key={opt} value={opt}>{opt}</option>
-                                  ))}
-                                </select>
-                              </td>
-                              <td style={TD}><DocCell id={`project2-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`project2-${i}`} docs={docs} /></td>
-                              <td style={{ ...TDS, fontWeight: 800 }}>{r.score}</td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#f3e8ff" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={9}>Total Score (Max 40)</td>
-                            <td style={{ ...TDS, fontWeight: "bold" }}>{projectBScore.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setProjects2((p) => [...p, { title: "", agency: "", date: "", amount: "", role: "", status: "", score: "", max: B4_PROJECT_MAX }])} onDel={() => setProjects2((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={projects2.length > 1} />
-                    </div>
-
-                    {/* Legacy external projects retained only for old saved data */}
-                    <div style={{ marginBottom: 16, display: "none" }}>
-                      <SubsectionTitle icon="externalProject">Legacy External Research Projects - Not counted in AY 2026-2027 total</SubsectionTitle>
-                      <table style={T}>
-                        <thead>
-                          <tr>
-                            <th style={{ ...TH, width: 30 }}>SN</th>
-                            <th style={TH}>Title</th>
-                            <th style={TH}>Funding Agency</th>
-                            <th style={TH}>Date of Sanction</th>
-                            <th style={TH}>Grant Amount</th>
-                            <th style={TH}>Role PI / Co-PI / Consultant</th>
-                            <th style={TH}>Status</th>
-                            <th style={TH}>Attachment</th>
-                            <th style={TH}>View Docs</th>
-                            <th style={TH}>Score</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {externalProjects.map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}><TI val={r.title} onChange={(v) => setExtPrj(i, "title", v)} textOnly placeholder="Project title" /></td>
-                              <td style={TD}><TI val={r.agency} onChange={(v) => setExtPrj(i, "agency", v)} textOnly placeholder="Funding agency" /></td>
-                              <td style={TD}><TI val={r.date} onChange={(v) => setExtPrj(i, "date", maskDateDDMMYYYY(v))} placeholder="DD/MM/YYYY" /></td>
-                              <td style={TD}><TI val={r.amount} onChange={(v) => setExtPrj(i, "amount", v)} numeric placeholder="Grant amount" /></td>
-                              <td style={TD}><TI val={r.role} onChange={(v) => setExtPrj(i, "role", v)} textOnly placeholder="PI / Co-PI / Consultant" /></td>
-                              <td style={TD}><TI val={r.status} onChange={(v) => setExtPrj(i, "status", v)} textOnly placeholder="Ongoing / Completed" /></td>
-                              <td style={TD}><DocCell id={`externalProject-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`externalProject-${i}`} docs={docs} /></td>
-                              <td style={TDS}><TI val={r.score} onChange={(v) => setExtPrj(i, "score", v)} center numeric max={0} /></td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#f3e8ff" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={9}>Total Score (Max 0)</td>
-                            <td style={{ ...TDS, fontWeight: "bold" }}>{externalProjectScore.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setExternalProjects((p) => [...p, { title: "", agency: "", date: "", amount: "", role: "", status: "", score: "" }])} onDel={() => setExternalProjects((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={externalProjects.length > 1} />
-                    </div>
-
-                    {/* B3. Patents, Copyrights & IP and Product Development */}
-                    <div style={{ marginBottom: 16, order: 3 }}>
-                      <SubsectionTitle icon="patent">B3. Patents, Copyrights & IP and Product Development - Max 40 marks</SubsectionTitle>
-                      <table style={T}>
-                        <thead>
-                          <tr>
-                            <th style={{ ...TH, width: 30 }}>SN</th>
-                            <th style={TH}>Title</th>
-                            <th style={TH}>National / International</th>
-                            <th style={TH}>Status (Published/Granted)</th>
-                            <th style={TH}>Filing / Grant No. & Date</th>
-                            <th style={TH}>Attachment</th>
-                            <th style={TH}>View Docs</th>
-                            <th style={TH}>Score</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {patents.map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}><TI val={r.title} onChange={(v) => setPat(i, "title", v)} textOnly placeholder="Patent / IP title" /></td>
-                              <td style={TD}>
-                                <select
-                                  value={r.type || r.level || r.scope || ""}
-                                  onChange={(e) => setPat(i, "type", e.target.value)}
-                                  style={{ width: "100%", height: 30, border: "1px solid #cbd5e1", borderRadius: 4, background: "#fff", fontSize: 11, fontFamily: "inherit" }}
-                                >
-                                  <option value="">Select Scope</option>
-                                  {["National", "International"].map((opt) => (
-                                    <option key={opt} value={opt}>{opt}</option>
-                                  ))}
-                                </select>
-                              </td>
-                              <td style={TD}>
-                                <select
-                                  value={r.status || ""}
-                                  onChange={(e) => setPat(i, "status", e.target.value)}
-                                  style={{ width: "100%", height: 30, border: "1px solid #cbd5e1", borderRadius: 4, background: "#fff", fontSize: 11, fontFamily: "inherit" }}
-                                >
-                                  <option value="">Select Status</option>
-                                  {["Published", "Granted"].map((opt) => (
-                                    <option key={opt} value={opt}>{opt}</option>
-                                  ))}
-                                </select>
-                              </td>
-                              <td style={TD}><TI val={r.fileNo || r.date} onChange={(v) => setPat(i, "fileNo", v)} placeholder="Filing / grant no. and date" /></td>
-                              <td style={TD}><DocCell id={`pat-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`pat-${i}`} docs={docs} /></td>
-                              <td style={TDS}><TI val={r.score} onChange={(v) => setPat(i, "score", v)} center numeric max={B3_PATENT_MAX} /></td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#f3e8ff" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={7}>Total Patents Score (Max 40)</td>
-                            <td style={{ ...TDS, fontWeight: "bold" }}>{patentScore.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setPatents((p) => [...p, { title: "", type: "", date: "", status: "", fileNo: "", score: "" }])} onDel={() => setPatents((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={patents.length > 1} />
-                    </div>
-
-                    {/* B9. Research Awards, Fellowships, Reviewer of Journal & Citations */}
-                    <div style={{ marginBottom: 16, order: 9 }}>
-                      <SubsectionTitle icon="trophy">B9. Research Awards, Fellowships, Reviewer of Journal & Citations - Max 20 marks</SubsectionTitle>
-                      <table style={T}>
-                        <thead>
-                          <tr>
-                            <th style={{ ...TH, width: 30 }}>SN</th>
-                            <th style={TH}>Title of Award / Fellowship / Metric</th>
-                            <th style={TH}>Awarding Agency</th>
-                            <th style={TH}>Level</th>
-                            <th style={TH}>Date</th>
-                            <th style={TH}>Attachment</th>
-                            <th style={TH}>View Docs</th>
-                            <th style={TH}>Score</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {awards.map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}><TI val={r.title} onChange={(v) => setAwd(i, "title", v)} textOnly placeholder="Title of Award / Fellowship / Metric" /></td>
-                              <td style={TD}><TI val={r.agency} onChange={(v) => setAwd(i, "agency", v)} textOnly placeholder="Awarding Agency" /></td>
-                              <td style={TD}><TI val={r.level} onChange={(v) => setAwd(i, "level", v)} textOnly placeholder="Level" /></td>
-                              <td style={TD}><TI val={r.date} onChange={(v) => setAwd(i, "date", maskDateDDMMYYYY(v))} placeholder="DD/MM/YYYY" /></td>
-                              <td style={TD}><DocCell id={`awd-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`awd-${i}`} docs={docs} /></td>
-                              <td style={TDS}><TI val={r.score} onChange={(v) => setAwd(i, "score", v)} center numeric max={B9_AWARDS_MAX} /></td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#f3e8ff" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={7}>Total Score (Max 20)</td>
-                            <td style={{ ...TDS, fontWeight: "bold" }}>{awardScore.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setAwards((p) => [...p, { title: "", agency: "", level: "", date: "", score: "" }])} onDel={() => setAwards((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={awards.length > 1} />
-                    </div>
-
-                    {/* B7. Conference / FDP Contributions - Organised */}
-                    <div style={{ marginBottom: 16, order: 7 }}>
-                      <SubsectionTitle icon="conference">B7. Conference / FDP / Training / Workshop Contributions Organised - Max 20 marks</SubsectionTitle>
-                      <table style={T}>
-                        <thead>
-                          <tr>
-                            <th style={{ ...TH, width: 30 }}>SN</th>
-                            <th style={TH}>Event / Session Title</th>
-                            <th style={TH}>Role</th>
-                            <th style={TH}>Date</th>
-                            <th style={TH}>Level (Intl./National)</th>
-                            <th style={TH}>Attachment</th>
-                            <th style={TH}>View Docs</th>
-                            <th style={TH}>Score</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {confs.map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}><TI val={r.title} onChange={(v) => setConf(i, "title", v)} textOnly placeholder="Event / Session Title" /></td>
-                              <td style={TD}><TI val={r.role || r.type} onChange={(v) => setConf(i, "role", v)} placeholder="Role (e.g. Coordinator)" /></td>
-                              <td style={TD}><TI val={r.date} onChange={(v) => setConf(i, "date", maskDateDDMMYYYY(v))} placeholder="DD/MM/YYYY" /></td>
-                              <td style={TD}><TI val={r.level || r.org} onChange={(v) => setConf(i, "level", v)} placeholder="Intl. / National" /></td>
-                              <td style={TD}><DocCell id={`conf-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`conf-${i}`} docs={docs} /></td>
-                              <td style={TDS}><TI val={r.score} onChange={(v) => setConf(i, "score", v)} center numeric max={B7_CONFERENCE_MAX} /></td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#f3e8ff" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={7}>Total Score (Max 20)</td>
-                            <td style={{ ...TDS, fontWeight: "bold" }}>{confScore.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setConfs((p) => [...p, { title: "", role: "", date: "", level: "", score: "" }])} onDel={() => setConfs((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={confs.length > 1} />
-                    </div>
-
-                    {/* B6. Consultancy, Testing & Training */}
-                    <div style={{ marginBottom: 16, order: 6 }}>
-                      <SubsectionTitle icon="consultancy">B6. Consultancy, Testing & Training - Max 20 marks</SubsectionTitle>
-                      <table style={T}>
-                        <thead>
-                          <tr>
-                            <th style={{ ...TH, width: 30 }}>SN</th>
-                            <th style={TH}>Client / Organisation</th>
-                            <th style={TH}>Nature of Engagement</th>
-                            <th style={TH}>Revenue Generated (₹)</th>
-                            <th style={TH}>Attachment</th>
-                            <th style={TH}>View Docs</th>
-                            <th style={TH}>Score</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {proposals.map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}><TI val={r.agency || r.title} onChange={(v) => setProp(i, "agency", v)} textOnly placeholder="Client / Organisation" /></td>
-                              <td style={TD}><TI val={r.duration || r.nature} onChange={(v) => setProp(i, "duration", v)} placeholder="Nature of Engagement" /></td>
-                              <td style={TD}><TI val={r.amount || r.revenue} onChange={(v) => setProp(i, "amount", v)} numeric placeholder="Revenue (₹)" /></td>
-                              <td style={TD}><DocCell id={`prop-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`prop-${i}`} docs={docs} /></td>
-                              <td style={{ ...TDS, fontWeight: 800 }}>{r.score}</td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#f3e8ff" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={6}>Total Score (Max 20)</td>
-                            <td style={{ ...TDS, fontWeight: "bold" }}>{proposalScore.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setProposals((p) => [...p, { agency: "", duration: "", amount: "", score: "" }])} onDel={() => setProposals((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={proposals.length > 1} />
-                    </div>
-
-                    {/* B10. Innovation, Start-ups & Technology Transfer */}
-                    <div style={{ marginBottom: 16, order: 10 }}>
-                      <SubsectionTitle icon="startup">B10. Innovation, Start-ups & Technology Transfer - Max 20 marks</SubsectionTitle>
-                      <table style={T}>
-                        <thead>
-                          <tr>
-                            <th style={{ ...TH, width: 30 }}>SN</th>
-                            <th style={TH}>Title / Start-up / Product</th>
-                            <th style={TH}>Role</th>
-                            <th style={TH}>Status</th>
-                            <th style={TH}>Attachment</th>
-                            <th style={TH}>View Docs</th>
-                            <th style={TH}>Score</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {products.map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}><TI val={r.details || r.title} onChange={(v) => setProd(i, "details", v)} placeholder="Title / start-up / product" /></td>
-                              <td style={TD}><TI val={r.role || r.usage} onChange={(v) => setProd(i, "role", v)} placeholder="Founder / mentor / developer" /></td>
-                              <td style={TD}><TI val={r.status} onChange={(v) => setProd(i, "status", v)} placeholder="Prototype / registered / commercialized" /></td>
-                              <td style={TD}><DocCell id={`prod-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`prod-${i}`} docs={docs} /></td>
-                              <td style={TDS}><TI val={r.score} onChange={(v) => setProd(i, "score", v)} center numeric max={B10_STARTUP_MAX} /></td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#f3e8ff" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={6}>Total Score (Max 20)</td>
-                            <td style={{ ...TDS, fontWeight: "bold" }}>{productScore.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setProducts((p) => [...p, { details: "", role: "", status: "", score: "" }])} onDel={() => setProducts((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={products.length > 1} />
-                    </div>
-
-                    {/* B8. Conference / FDP / Industry Training - Attended */}
-                    <div style={{ marginBottom: 16, order: 8 }}>
-                      <SubsectionTitle icon="workshop">B8. Conference / FDP / Industry Training - Attended - Max 20 marks</SubsectionTitle>
-                      <table style={T}>
-                        <thead>
-                          <tr>
-                            <th style={{ ...TH, width: 30 }}>SN</th>
-                            <th style={TH}>Programme / Event</th>
-                            <th style={TH}>From</th>
-                            <th style={TH}>To</th>
-                            <th style={TH}>Organised By</th>
-                            <th style={TH}>Attachment</th>
-                            <th style={TH}>View Docs</th>
-                            <th style={TH}>Score</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {fdps.map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}><TI val={r.program} onChange={(v) => setFdp(i, "program", v)} placeholder="Programme / Event" /></td>
-                              <td style={TD}><TI val={r.fromDate} onChange={(v) => setFdp(i, "fromDate", maskDateDDMMYYYY(v))} placeholder="DD/MM/YYYY" /></td>
-                              <td style={TD}><TI val={r.toDate} onChange={(v) => setFdp(i, "toDate", maskDateDDMMYYYY(v))} placeholder="DD/MM/YYYY" /></td>
-                              <td style={TD}><TI val={r.org} onChange={(v) => setFdp(i, "org", v)} placeholder="Organised By" /></td>
-                              <td style={TD}><DocCell id={`fdp-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`fdp-${i}`} docs={docs} /></td>
-                              <td style={TDS}><TI val={r.score} onChange={(v) => setFdp(i, "score", v)} center numeric max={SCORE_LIMITS.fdpRow} /></td>
-                            </tr>
-                          ))}
-                          <tr style={{ background: "#f3e8ff" }}>
-                            <td style={{ ...TDC, fontWeight: "bold" }} colSpan={7}>Total B8 Score (Max 20)</td>
-                            <td style={{ ...TDS, fontWeight: "bold" }}>{b8Score.toFixed(1)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setFdps((p) => [...p, { program: "", fromDate: "", toDate: "", org: "", score: "" }])} onDel={() => setFdps((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={fdps.length > 1} />
-                    </div>
-
-                    {/* Legacy B8(b) Industrial Training section retained hidden for backwards compatibility */}
-                    <div style={{ display: "none" }}>
-                      <SubsectionTitle icon="industrialTraining">B8(b). Industrial Training</SubsectionTitle>
-                      <table style={T}>
-                        <thead>
-                          <tr>
-                            <th style={{ ...TH, width: 30 }}>SN</th>
-                            <th style={TH}>Company</th>
-                            <th style={TH}>Duration</th>
-                            <th style={TH}>Nature</th>
-                            <th style={TH}>Attachment</th>
-                            <th style={TH}>View Docs</th>
-                            <th style={TH}>Score</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {training.map((r, i) => (
-                            <tr key={i} style={i % 2 === 1 ? { background: "#f8fafc" } : {}}>
-                              <td style={TDC}>{i + 1}</td>
-                              <td style={TD}><TI val={r.company} onChange={(v) => setTrain(i, "company", v)} placeholder="Company / industry name" /></td>
-                              <td style={TD}><TI val={r.duration} onChange={(v) => setTrain(i, "duration", v)} placeholder="Duration" /></td>
-                              <td style={TD}><TI val={r.nature} onChange={(v) => setTrain(i, "nature", v)} placeholder="Nature of training" /></td>
-                              <td style={TD}><DocCell id={`train-${i}`} docs={docs} setDocs={setDocs} /></td>
-                              <td style={TD}><ViewCell id={`train-${i}`} docs={docs} /></td>
-                              <td style={TDS}><TI val={r.score} onChange={(v) => setTrain(i, "score", v)} center numeric max={SCORE_LIMITS.fdpRow} /></td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      <RowBtns onAdd={() => setTraining((p) => [...p, { company: "", duration: "", nature: "", score: "" }])} onDel={() => setTraining((p) => p.length > 1 ? p.slice(0, -1) : p)} canDel={training.length > 1} />
-                    </div>
-                  </SC>
-                )}
-
-                {["partA", "partB", "partC", "partD", "partE"].includes(hodAppraisalTab) && !formLocked && (
-                  <SectionSaveFooter
-                    label={{ partA: "Part A", partB: "Part B", partC: "Part C", partD: "Part D", partE: "Part E" }[hodAppraisalTab]}
-                    saved={Boolean(sectionSaveStatus[hodAppraisalTab])}
-                    saving={savingSection === hodAppraisalTab}
-                    locked={formLocked}
-                    onSaveDraft={() => handleSaveCurrentSection(hodAppraisalTab, false)}
-                    onSaveNext={() => handleSaveCurrentSection(hodAppraisalTab, true)}
-                  />
-                )}
-
-                {/* Summary Tab */}
-                {!isLegacyTwoPartYear && hodAppraisalTab === "summary" && (
-                  <SC title="Appraisal Summary & Submission" accent="#10b981">
-                    <table className="appraisal-summary-table" style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, marginBottom: 0, border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden", boxShadow: "0 12px 26px rgba(15,23,42,0.04)" }}>
-                      <tbody>
-                        <SummaryRow label="Part A - Teaching & Learning" score={partATotal} max={effectivePartAMax} color="#4f46e5" tone="#eef2ff" iconTone="#eef2ff" icon="book" />
-                        <SummaryRow label="Part B - Research & Innovation" score={partBTotal} max={effectivePartBMax} color="#7c3aed" tone="#f3e8ff" iconTone="#f5f3ff" icon="flask" />
-                        <SummaryRow label="Part C - Administrative Contribution" score={partCTotal} max={PART_C_MAX} color="#0f766e" tone="#ccfbf1" iconTone="#ccfbf1" icon="building" />
-                        <SummaryRow label="Part D - Leave & Attendance Management" score={partDTotal} max={PART_D_MAX} color="#0891b2" tone="#cffafe" iconTone="#cffafe" icon="report" />
-                        <SummaryRow label="Grand Total" score={grandTotal} max={effectiveGrandMax} color={g.color} tone="#ffe4e6" iconTone="#f1f5f9" icon="sigma" />
-                      </tbody>
-                    </table>
-
-                    <SummaryOtherInfoField
-                      value={summaryOtherInfo}
-                      onChange={setSummaryOtherInfo}
-                      readOnly={formLocked}
-                      rows={5}
-                    />
-
-                    <label className={declarationConfirmed ? "appraisal-declaration-card appraisal-confirmation-card is-checked" : "appraisal-declaration-card appraisal-confirmation-card"} style={{ display: "flex", alignItems: "flex-start", gap: 14, padding: "14px 18px", background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 12, marginBottom: 0, color: "#334155", fontSize: 13, lineHeight: 1.5, cursor: formLocked ? "not-allowed" : "pointer", transition: "background 180ms ease, border-color 180ms ease, box-shadow 180ms ease" }}>
-                      <input
-                        type="checkbox"
-                        checked={declarationConfirmed}
-                        onChange={(e) => setDeclarationConfirmed(e.target.checked)}
-                        disabled={submitting || formLocked}
-                        style={{ marginTop: 2, width: 18, height: 18, accentColor: "#2563eb", flexShrink: 0 }}
-                      />
-                      <span>I hereby declare that the information furnished above is true and correct to the best of my knowledge and belief, and is supported by documentary evidence enclosed with this form. I understand that any false claim, if detected at any stage, may render this appraisal liable to cancellation and may attract disciplinary action as per university policy.</span>
-                    </label>
-
-                    <label className={attachmentsConfirmed ? "appraisal-declaration-card is-checked" : "appraisal-declaration-card"} style={{ display: "flex", alignItems: "flex-start", gap: 14, padding: "14px 18px", background: attachmentsConfirmed ? "#dcfce7" : "#ecfdf5", border: `1px solid ${attachmentsConfirmed ? "#86efac" : "#bbf7d0"}`, borderRadius: 12, marginBottom: 0, color: "#334155", fontSize: 13, lineHeight: 1.5, cursor: formLocked ? "not-allowed" : "pointer", transition: "background 180ms ease, border-color 180ms ease, box-shadow 180ms ease", boxShadow: attachmentsConfirmed ? "0 10px 24px rgba(16,185,129,0.10)" : "none" }}>
-                      <input
-                        type="checkbox"
-                        checked={attachmentsConfirmed}
-                        onChange={(e) => setAttachmentsConfirmed(e.target.checked)}
-                        disabled={submitting || formLocked}
-                        style={{ marginTop: 2, width: 18, height: 18, accentColor: "#10b981", flexShrink: 0 }}
-                      />
-                      <span>I confirm that <strong>all required supporting documents and attachments have been uploaded</strong> against the respective entries. I understand that any <strong>missing or false attachment is my sole responsibility</strong> and may result in the rejection or revision of my appraisal.</span>
-                    </label>
-
-                    <div className="appraisal-summary-actions" style={{ display: "flex", justifyContent: "center", gap: 14, flexWrap: "wrap" }}>
-                      <button
-                        type="button"
-                        onClick={generateReport}
-                        className="appraisal-report-button"
-                        style={{ minWidth: 172, minHeight: 42, padding: "10px 24px", background: "linear-gradient(180deg,#6d28d9 0%,#4c1d95 100%)", color: "#fff", border: "none", borderRadius: 9, cursor: "pointer", fontWeight: 800, fontSize: 13, fontFamily: "inherit", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 9, boxShadow: "0 10px 20px rgba(76,29,149,0.22)" }}
-                      >
-                        <InlineSvgIcon paths={SUMMARY_ICONS.report} size={16} />
-                        Generate Report
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleSubmitAppraisal}
-                        disabled={submitting || formLocked || !declarationConfirmed || !attachmentsConfirmed}
-                        className="appraisal-submit-button"
-                        style={{ minWidth: 172, minHeight: 42, padding: "10px 24px", background: (formLocked || !declarationConfirmed || !attachmentsConfirmed) ? "#64748b" : "linear-gradient(180deg,#334155 0%,#1e293b 100%)", color: "#fff", border: "none", borderRadius: 9, cursor: (formLocked || !declarationConfirmed || !attachmentsConfirmed) ? "not-allowed" : "pointer", fontWeight: 800, fontSize: 13, fontFamily: "inherit", opacity: submitting ? 0.76 : 1, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 9, boxShadow: (formLocked || !declarationConfirmed || !attachmentsConfirmed) ? "none" : "0 10px 20px rgba(30,41,59,0.18)" }}
-                      >
-                        {submitting ? <span className="appraisal-button-spinner" aria-hidden="true" /> : <InlineSvgIcon paths={SUMMARY_ICONS.send} size={16} />}
-                        {formLocked ? "Submitted & Locked" : submitting ? "Submitting..." : "Submit Appraisal"}
-                      </button>
-                    </div>
-                  </SC>
-                )}
-              </fieldset>
-            </div>
-            )}
-          </div>
+              </div>
+              <SectionNavFooter prevSection="sec10" onNavigate={handleMyAppraisalSectionChange} />
+            </SC>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
-
