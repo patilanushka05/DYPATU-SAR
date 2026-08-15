@@ -43,6 +43,7 @@ import {
   roleLabel,
 } from "../../../../utils/hierarchy";
 import { getSchoolByValue } from "../../../../constants/universityHierarchy";
+import { openSarReport } from "./sarReport";
 
 // Helper SVG Icon component
 function InlineSvgIcon({ paths, size = 16, color = "currentColor" }) {
@@ -133,6 +134,16 @@ function calcFeedbackSemScore(rows) {
   if (avg >= 65) return 2;
   if (avg >= 60) return 1;
   return 0;
+}
+
+// Display-only average of the entered "Feedback" % values for a semester — used for
+// the "Average Feedback" column and does not feed into scoring.
+function averageFeedbackPct(rows) {
+  if (!rows || rows.length === 0) return "";
+  const validPcts = rows.map((r) => Number(r.feedbackPct)).filter((v) => !isNaN(v) && v > 0);
+  if (validPcts.length === 0) return "";
+  const avg = validPcts.reduce((a, b) => a + b, 0) / validPcts.length;
+  return `${avg.toFixed(1)}%`;
 }
 
 function calcResultAnalysisRowScore(passingPct, difficulty) {
@@ -230,10 +241,10 @@ export default function StandardMyAppraisal({
 
   // --- SECTION 1 STATE ---
   const [sem1Workload, setSem1Workload] = useState([
-    { class: "", subject: "", planned: "", conducted: "" },
+    { class: "", subject: "", planned: "", conducted: "", score: "" },
   ]);
   const [sem2Workload, setSem2Workload] = useState([
-    { class: "", subject: "", planned: "", conducted: "" },
+    { class: "", subject: "", planned: "", conducted: "", score: "" },
   ]);
   const [eContentRows, setEContentRows] = useState([
     { subject: "", topic: "", link: "", score: "" },
@@ -245,62 +256,64 @@ export default function StandardMyAppraisal({
   // --- SECTION 2 STATE ---
   const [sem1Feedback, setSem1Feedback] = useState([{ subject: "", feedbackPct: "" }]);
   const [sem2Feedback, setSem2Feedback] = useState([{ subject: "", feedbackPct: "" }]);
+  const [sem1FeedbackSelfScore, setSem1FeedbackSelfScore] = useState("");
+  const [sem2FeedbackSelfScore, setSem2FeedbackSelfScore] = useState("");
 
   // --- SECTION 3 STATE ---
   const [instAdmin, setInstAdmin] = useState([
-    { name: "", role: "Institute Level Coordinator/Head" },
+    { name: "", role: "Institute Level Coordinator/Head", score: "" },
   ]);
   const [deptAdmin, setDeptAdmin] = useState([
-    { name: "", role: "Department Level Coordinator" },
+    { name: "", role: "Department Level Coordinator", score: "" },
   ]);
 
   // --- SECTION 4 STATE ---
   const [sem1Results, setSem1Results] = useState([
-    { subject: "", passingPct: "", prevYearResult: "", difficulty: "Easy" },
+    { subject: "", passingPct: "", prevYearResult: "", difficulty: "Easy", score: "" },
   ]);
   const [sem2Results, setSem2Results] = useState([
-    { subject: "", passingPct: "", prevYearResult: "", difficulty: "Easy" },
+    { subject: "", passingPct: "", prevYearResult: "", difficulty: "Easy", score: "" },
   ]);
   const [examDuties, setExamDuties] = useState(
-    FIXED_EXAM_DUTIES.map((duty) => ({ duty, details: "", score: "0" }))
+    FIXED_EXAM_DUTIES.map((duty) => ({ duty, details: "", score: "" }))
   );
 
   // --- SECTION 5 STATE ---
   const [extensionActs, setExtensionActs] = useState([
-    { particular: "", hours: "", dateFrom: "", dateTo: "", score: "5" },
+    { particular: "", hours: "", dateFrom: "", dateTo: "", score: "" },
   ]);
 
   // --- SECTION 6 STATE ---
   const [obeRows, setObeRows] = useState(
-    FIXED_OBE_ITEMS.map((item) => ({ particular: item, available: "No" }))
+    FIXED_OBE_ITEMS.map((item) => ({ particular: item, available: "No", score: "" }))
   );
   const [partEvents, setPartEvents] = useState([
-    { event: "", organizedBy: "", dateDuration: "", score: "5" },
+    { event: "", organizedBy: "", dateDuration: "", score: "" },
   ]);
   const [condEvents, setCondEvents] = useState([
-    { event: "", date: "", duration: "", score: "5" },
+    { event: "", date: "", duration: "", score: "" },
   ]);
   const [invitedTeachers, setInvitedTeachers] = useState([
-    { event: "", organizedBy: "", dateDuration: "", level: "University" },
+    { event: "", organizedBy: "", dateDuration: "", level: "University", score: "" },
   ]);
   const [nptelCerts, setNptelCerts] = useState([
-    { subject: "", duration: "", dateCompletion: "", pctScore: "", score: "5" },
+    { subject: "", duration: "", dateCompletion: "", pctScore: "", score: "" },
   ]);
 
   // --- SECTION 7 STATE ---
   const [internships, setInternships] = useState([
-    { studentName: "", industryName: "", stipendDuration: "", progressReport: "No" },
+    { studentName: "", industryName: "", stipendDuration: "", progressReport: "No", score: "" },
   ]);
   const [mentoringRows, setMentoringRows] = useState([
-    { classDiv: "", numStudents: "", freqMeetings: "", totalMeetings: "" },
+    { classDiv: "", numStudents: "", freqMeetings: "", totalMeetings: "", score: "" },
   ]);
 
   // --- SECTION 8 STATE ---
   const [collaborations, setCollaborations] = useState([
-    { particular: "", industryName: "", nature: "", score: "5" },
+    { particular: "", industryName: "", nature: "", score: "" },
   ]);
   const [sponsoredProjects, setSponsoredProjects] = useState([
-    { projectTitle: "", amount: "", sponsoringAgency: "", score: "5" },
+    { projectTitle: "", amount: "", sponsoringAgency: "", score: "" },
   ]);
 
   // --- SECTION 9 STATE ---
@@ -308,127 +321,117 @@ export default function StandardMyAppraisal({
     { title: "", fundingAgency: "", grantAmount: "", score: "" },
   ]);
   const [ugcJournals, setUgcJournals] = useState([
-    { title: "", journal: "", publisher: "", issn: "", authorPosition: "1st Author" },
+    { title: "", journal: "", publisher: "", issn: "", authorPosition: "1st Author", score: "" },
   ]);
   const [indexedJournals, setIndexedJournals] = useState([
-    { title: "", journal: "", citationIndex: "", hIndex: "", authorPosition: "1st Author" },
+    { title: "", journal: "", citationIndex: "", hIndex: "", authorPosition: "1st Author", score: "" },
   ]);
   const [conferences, setConferences] = useState([
-    { title: "", conference: "", proceedingsTitle: "", score: "2.5" },
+    { title: "", conference: "", proceedingsTitle: "", score: "" },
   ]);
   const [booksChapters, setBooksChapters] = useState([
-    { type: "Book", title: "", chapterName: "", publisher: "" },
+    { type: "Book", title: "", chapterName: "", publisher: "", score: "" },
   ]);
   const [reviewerEditorial, setReviewerEditorial] = useState([
-    { journalBook: "", level: "National", role: "Reviewer", score: "5" },
+    { journalBook: "", level: "National", role: "Reviewer", score: "" },
   ]);
   const [patentsCopyrights, setPatentsCopyrights] = useState([
-    { title: "", type: "Copyright", appNo: "", status: "Filed" },
+    { title: "", type: "Copyright", appNo: "", status: "Filed", score: "" },
   ]);
   const [developmentActs, setDevelopmentActs] = useState([
-    { activity: "", fundingAmount: "", score: "5" },
+    { activity: "", fundingAmount: "", score: "" },
   ]);
   const [consultancyRows, setConsultancyRows] = useState([
-    { area: "", fundsGenerated: "", score: "5" },
+    { area: "", fundsGenerated: "", score: "" },
   ]);
   const [awardsRows, setAwardsRows] = useState([
-    { particular: "", agency: "", score: "5" },
+    { particular: "", agency: "", score: "" },
   ]);
   const [otherAchievements, setOtherAchievements] = useState([
-    { achievement: "", level: "", score: "5" },
+    { achievement: "", level: "", score: "" },
   ]);
 
   // --- SECTION 10 STATE ---
   const [personalAttributes, setPersonalAttributes] = useState(
-    FIXED_PERSONAL_ATTRIBUTES.map((attr) => ({ attribute: attr, score: "1" }))
+    FIXED_PERSONAL_ATTRIBUTES.map((attr) => ({ attribute: attr, score: "" }))
   );
 
   const [docs, setDocs] = useState({});
 
+  // --- SUMMARY: DECLARATION / SUBMIT / REPORT (UI-only — no backend wiring yet) ---
+  const [declarationChecked, setDeclarationChecked] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+
   // --- SCORE CALCULATIONS ---
 
   // Sec 1
-  const sem1WorkloadScores = sem1Workload.map((r) => calcWorkloadRowScore(r.planned, r.conducted));
+  const sem1WorkloadScores = sem1Workload.map((r) => Number(r.score) || 0);
   const sem1WorkloadMax = sem1WorkloadScores.length > 0 ? Math.max(...sem1WorkloadScores, 0) : 0;
   const sem1WorkloadScore = Math.min(20, sem1WorkloadMax);
 
-  const sem2WorkloadScores = sem2Workload.map((r) => calcWorkloadRowScore(r.planned, r.conducted));
+  const sem2WorkloadScores = sem2Workload.map((r) => Number(r.score) || 0);
   const sem2WorkloadMax = sem2WorkloadScores.length > 0 ? Math.max(...sem2WorkloadScores, 0) : 0;
   const sem2WorkloadScore = Math.min(20, sem2WorkloadMax);
 
-  const eContentScore = Math.min(6, eContentRows.reduce((sum, r) => sum + (Number(r.score) || 3), 0));
-  const innovScore = Math.min(4, innovRows.reduce((sum, r) => sum + (Number(r.score) || 2), 0));
+  const eContentScore = Math.min(6, eContentRows.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const innovScore = Math.min(4, innovRows.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
   const sec1Total = Math.min(50, sem1WorkloadScore + sem2WorkloadScore + eContentScore + innovScore);
 
   // Sec 2
-  const sem1FeedbackScore = calcFeedbackSemScore(sem1Feedback);
-  const sem2FeedbackScore = calcFeedbackSemScore(sem2Feedback);
+  const sem1FeedbackScore = Math.min(5, Number(sem1FeedbackSelfScore) || 0);
+  const sem2FeedbackScore = Math.min(5, Number(sem2FeedbackSelfScore) || 0);
   const sec2Total = Math.min(10, sem1FeedbackScore + sem2FeedbackScore);
+  const sem1AvgFeedback = averageFeedbackPct(sem1Feedback);
+  const sem2AvgFeedback = averageFeedbackPct(sem2Feedback);
 
   // Sec 3
-  const instAdminScore = instAdmin.reduce((sum, r) => sum + (r.role === "Institute Level Coordinator/Head" ? 10 : 3), 0);
-  const deptAdminScore = deptAdmin.reduce((sum, r) => sum + (r.role === "Department Level Coordinator" ? 5 : 1), 0);
+  const instAdminScore = Math.min(10, instAdmin.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const deptAdminScore = Math.min(10, deptAdmin.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
   const sec3Total = Math.min(20, instAdminScore + deptAdminScore);
 
   // Sec 4
-  const sem1ResScores = sem1Results.map((r) => calcResultAnalysisRowScore(r.passingPct, r.difficulty));
+  const sem1ResScores = sem1Results.map((r) => Number(r.score) || 0);
   const sem1ResultScore = Math.min(7, sem1ResScores.length > 0 ? Math.max(...sem1ResScores, 0) : 0);
 
-  const sem2ResScores = sem2Results.map((r) => calcResultAnalysisRowScore(r.passingPct, r.difficulty));
+  const sem2ResScores = sem2Results.map((r) => Number(r.score) || 0);
   const sem2ResultScore = Math.min(7, sem2ResScores.length > 0 ? Math.max(...sem2ResScores, 0) : 0);
 
   const examDutiesScore = Math.min(6, examDuties.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
   const sec4Total = Math.min(20, sem1ResultScore + sem2ResultScore + examDutiesScore);
 
   // Sec 5
-  const sec5Total = Math.min(10, extensionActs.reduce((sum, r) => sum + (Number(r.score) || 5), 0));
+  const sec5Total = Math.min(10, extensionActs.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
 
   // Sec 6
-  const obeScore = Math.min(20, obeRows.reduce((sum, r) => sum + (r.available === "Yes" ? 4 : 0), 0));
-  const partEventsScore = Math.min(15, partEvents.reduce((sum, r) => sum + (Number(r.score) || 5), 0));
-  const condEventsScore = Math.min(10, condEvents.reduce((sum, r) => sum + (Number(r.score) || 5), 0));
-  const invitedScore = Math.min(5, invitedTeachers.reduce((sum, r) => {
-    const lvl = r.level;
-    const pts = lvl === "International" ? 5 : lvl === "National" ? 3 : lvl === "State" ? 2 : 1;
-    return sum + pts;
-  }, 0));
-  const nptelScore = Math.min(10, nptelCerts.reduce((sum, r) => sum + (Number(r.score) || 5), 0));
+  const obeScore = Math.min(20, obeRows.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const partEventsScore = Math.min(15, partEvents.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const condEventsScore = Math.min(10, condEvents.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const invitedScore = Math.min(5, invitedTeachers.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const nptelScore = Math.min(10, nptelCerts.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
   const sec6Total = Math.min(60, obeScore + partEventsScore + condEventsScore + invitedScore + nptelScore);
 
   // Sec 7
-  const internshipScore = Math.min(10, internships.reduce((sum, r) => sum + (r.progressReport === "Yes" ? 5 : 0), 0));
-  const mentoringScore = Math.min(10, mentoringRows.reduce((sum, r) => sum + (Number(r.totalMeetings) * 2.5 || 0), 0));
+  const internshipScore = Math.min(10, internships.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const mentoringScore = Math.min(10, mentoringRows.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
   const sec7Total = Math.min(20, internshipScore + mentoringScore);
 
   // Sec 8
-  const collabScore = Math.min(10, collaborations.reduce((sum, r) => sum + (Number(r.score) || 5), 0));
-  const sponsoredScore = Math.min(10, sponsoredProjects.reduce((sum, r) => sum + (Number(r.score) || 5), 0));
+  const collabScore = Math.min(10, collaborations.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const sponsoredScore = Math.min(10, sponsoredProjects.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
   const sec8Total = Math.min(20, collabScore + sponsoredScore);
 
   // Sec 9
-  const grantsScore = Math.min(10, researchGrants.reduce((sum, r) => sum + (Number(r.score) || 5), 0));
-  const ugcScore = Math.min(10, ugcJournals.reduce((sum, r) => {
-    const pos = r.authorPosition;
-    const pts = pos === "1st Author" ? 3 : pos === "2nd Author" ? 2 : 1;
-    return sum + pts;
-  }, 0));
-  const indexedScore = Math.min(10, indexedJournals.reduce((sum, r) => {
-    const pos = r.authorPosition;
-    const pts = pos === "1st Author" ? 10 : pos === "2nd Author" ? 8 : pos === "3rd Author" ? 6 : 3;
-    return sum + pts;
-  }, 0));
-  const confsScore = Math.min(5, conferences.reduce((sum, r) => sum + (Number(r.score) || 2.5), 0));
-  const booksScore = Math.min(5, booksChapters.reduce((sum, r) => sum + (r.type === "Book" ? 5 : 2.5), 0));
-  const reviewerScore = Math.min(5, reviewerEditorial.reduce((sum, r) => sum + (Number(r.score) || 5), 0));
-  const patentsScore = Math.min(10, patentsCopyrights.reduce((sum, r) => {
-    const t = r.type;
-    const pts = t === "Utility Patent" ? 10 : t === "Design Patent" ? 5 : 2.5;
-    return sum + pts;
-  }, 0));
-  const devScore = Math.min(5, developmentActs.reduce((sum, r) => sum + (Number(r.score) || 5), 0));
-  const consultScore = Math.min(5, consultancyRows.reduce((sum, r) => sum + (Number(r.score) || 5), 0));
-  const awdScore = Math.min(5, awardsRows.reduce((sum, r) => sum + (Number(r.score) || 5), 0));
-  const othScore = Math.min(10, otherAchievements.reduce((sum, r) => sum + (Number(r.score) || 5), 0));
+  const grantsScore = Math.min(10, researchGrants.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const ugcScore = Math.min(10, ugcJournals.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const indexedScore = Math.min(10, indexedJournals.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const confsScore = Math.min(5, conferences.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const booksScore = Math.min(5, booksChapters.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const reviewerScore = Math.min(5, reviewerEditorial.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const patentsScore = Math.min(10, patentsCopyrights.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const devScore = Math.min(5, developmentActs.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const consultScore = Math.min(5, consultancyRows.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const awdScore = Math.min(5, awardsRows.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
+  const othScore = Math.min(10, otherAchievements.reduce((sum, r) => sum + (Number(r.score) || 0), 0));
   const sec9Total = Math.min(80, grantsScore + ugcScore + indexedScore + confsScore + booksScore + reviewerScore + patentsScore + devScore + consultScore + awdScore + othScore);
 
   // Sec 10
@@ -461,11 +464,11 @@ export default function StandardMyAppraisal({
   // Dummy test data filler
   const fillStandardDummyData = () => {
     setSem1Workload([
-      { class: "B.Tech CSE Sem 5", subject: "Database Systems", planned: "45", conducted: "42" },
-      { class: "B.Tech CSE Sem 3", subject: "Data Structures", planned: "40", conducted: "38" },
+      { class: "B.Tech CSE Sem 5", subject: "Database Systems", planned: "45", conducted: "42", score: "20" },
+      { class: "B.Tech CSE Sem 3", subject: "Data Structures", planned: "40", conducted: "38", score: "20" },
     ]);
     setSem2Workload([
-      { class: "B.Tech CSE Sem 6", subject: "Web Development", planned: "42", conducted: "40" },
+      { class: "B.Tech CSE Sem 6", subject: "Web Development", planned: "42", conducted: "40", score: "20" },
     ]);
     setEContentRows([
       { subject: "Database Systems", topic: "SQL Indexing Video Lecture", link: "https://youtube.com/example", score: "3" },
@@ -482,17 +485,19 @@ export default function StandardMyAppraisal({
     setSem2Feedback([
       { subject: "Web Development", feedbackPct: "90" },
     ]);
+    setSem1FeedbackSelfScore("5");
+    setSem2FeedbackSelfScore("5");
     setInstAdmin([
-      { name: "NAAC Steering Committee", role: "Institute Level Coordinator/Head" },
+      { name: "NAAC Steering Committee", role: "Institute Level Coordinator/Head", score: "10" },
     ]);
     setDeptAdmin([
-      { name: "Department Timetable Committee", role: "Department Level Coordinator" },
+      { name: "Department Timetable Committee", role: "Department Level Coordinator", score: "5" },
     ]);
     setSem1Results([
-      { subject: "Database Systems", passingPct: "85", prevYearResult: "82", difficulty: "Medium" },
+      { subject: "Database Systems", passingPct: "85", prevYearResult: "82", difficulty: "Medium", score: "7" },
     ]);
     setSem2Results([
-      { subject: "Web Development", passingPct: "88", prevYearResult: "85", difficulty: "Easy" },
+      { subject: "Web Development", passingPct: "88", prevYearResult: "85", difficulty: "Easy", score: "7" },
     ]);
     setExamDuties(
       FIXED_EXAM_DUTIES.map((duty) => ({ duty, details: "Completed successfully", score: "2" }))
@@ -502,7 +507,7 @@ export default function StandardMyAppraisal({
       { particular: "Industrial Visit to IT Park", hours: "16", dateFrom: "20/10/2026", dateTo: "21/10/2026", score: "5" },
     ]);
     setObeRows(
-      FIXED_OBE_ITEMS.map((item) => ({ particular: item, available: "Yes" }))
+      FIXED_OBE_ITEMS.map((item) => ({ particular: item, available: "Yes", score: "4" }))
     );
     setPartEvents([
       { event: "AI & ML National FDP", organizedBy: "IIT Bombay", dateDuration: "5 Days", score: "5" },
@@ -512,17 +517,17 @@ export default function StandardMyAppraisal({
       { event: "Python Programming Workshop", date: "15/11/2026", duration: "2 Days", score: "5" },
     ]);
     setInvitedTeachers([
-      { event: "Keynote on Cloud Computing", organizedBy: "State Tech University", dateDuration: "1 Day", level: "State" },
+      { event: "Keynote on Cloud Computing", organizedBy: "State Tech University", dateDuration: "1 Day", level: "State", score: "2" },
     ]);
     setNptelCerts([
       { subject: "Cloud Computing", duration: "12 Weeks", dateCompletion: "Nov 2026", pctScore: "82%", score: "5" },
     ]);
     setInternships([
-      { studentName: "Group A (4 Students)", industryName: "TCS Innovation Labs", stipendDuration: "6 Months", progressReport: "Yes" },
-      { studentName: "Group B (3 Students)", industryName: "Infosys Campus", stipendDuration: "3 Months", progressReport: "Yes" },
+      { studentName: "Group A (4 Students)", industryName: "TCS Innovation Labs", stipendDuration: "6 Months", progressReport: "Yes", score: "5" },
+      { studentName: "Group B (3 Students)", industryName: "Infosys Campus", stipendDuration: "3 Months", progressReport: "Yes", score: "5" },
     ]);
     setMentoringRows([
-      { classDiv: "B.Tech CSE-A", numStudents: "20", freqMeetings: "Monthly", totalMeetings: "4" },
+      { classDiv: "B.Tech CSE-A", numStudents: "20", freqMeetings: "Monthly", totalMeetings: "4", score: "10" },
     ]);
     setCollaborations([
       { particular: "Joint Research Activity", industryName: "Tech Solutions Pvt Ltd", nature: "Research & Training", score: "5" },
@@ -534,22 +539,22 @@ export default function StandardMyAppraisal({
       { title: "IoT Sensor Network for Smart Farming", fundingAgency: "DST-SERB (3 Years)", grantAmount: "15.5", score: "10" },
     ]);
     setUgcJournals([
-      { title: "Efficient Data Indexing in Distributed Systems", journal: "Journal of Computer Science", publisher: "UGC Care", issn: "1234-5678", authorPosition: "1st Author" },
+      { title: "Efficient Data Indexing in Distributed Systems", journal: "Journal of Computer Science", publisher: "UGC Care", issn: "1234-5678", authorPosition: "1st Author", score: "3" },
     ]);
     setIndexedJournals([
-      { title: "Deep Learning for Agricultural Disease Detection", journal: "IEEE Transactions on Agriculture", citationIndex: "14", hIndex: "8", authorPosition: "1st Author" },
+      { title: "Deep Learning for Agricultural Disease Detection", journal: "IEEE Transactions on Agriculture", citationIndex: "14", hIndex: "8", authorPosition: "1st Author", score: "10" },
     ]);
     setConferences([
       { title: "Cloud Optimization Techniques", conference: "International Conference on Computing", proceedingsTitle: "IEEE Xplore", score: "2.5" },
     ]);
     setBooksChapters([
-      { type: "Book", title: "Modern Software Engineering Practices", chapterName: "-", publisher: "Springer Nature" },
+      { type: "Book", title: "Modern Software Engineering Practices", chapterName: "-", publisher: "Springer Nature", score: "5" },
     ]);
     setReviewerEditorial([
       { journalBook: "Journal of Systems & Software", level: "International", role: "Reviewer", score: "5" },
     ]);
     setPatentsCopyrights([
-      { title: "System for Crop Health Monitoring", type: "Utility Patent", appNo: "202641098765", status: "Published" },
+      { title: "System for Crop Health Monitoring", type: "Utility Patent", appNo: "202641098765", status: "Published", score: "10" },
     ]);
     setDevelopmentActs([
       { activity: "Setup of Advanced IoT Research Laboratory", fundingAmount: "3 Lakhs", score: "5" },
@@ -566,6 +571,40 @@ export default function StandardMyAppraisal({
     setPersonalAttributes(
       FIXED_PERSONAL_ATTRIBUTES.map((attr) => ({ attribute: attr, score: "1" }))
     );
+  };
+
+  // Faculty self-declaration submit — UI-only for now. The DYPATU SAR form has its own
+  // 300-mark field shape and is not yet wired to the (old-form-specific) submitAppraisal
+  // service, so this only records the declaration + locks the button locally.
+  const handleSubmitAppraisal = () => {
+    if (!declarationChecked || submitted) return;
+    setSubmitted(true);
+  };
+
+  // Full DYPATU SAR report (Part A, Sections 1-10, Summary, Declaration, and the
+  // evaluator sheets that follow in the PDF). Built by sarReport.js — self-contained
+  // and specific to this form; does not reuse the old Standard Appraisal report
+  // generator or its 700/725-mark totals, which belong to a different form shape.
+  const handleGenerateReport = () => {
+    openSarReport({
+      info,
+      sem1Workload, sem2Workload, eContentRows, innovRows,
+      sem1Feedback, sem2Feedback, sem1FeedbackSelfScore, sem2FeedbackSelfScore,
+      instAdmin, deptAdmin,
+      sem1Results, sem2Results, examDuties,
+      extensionActs,
+      obeRows, partEvents, condEvents, invitedTeachers, nptelCerts,
+      internships, mentoringRows,
+      collaborations, sponsoredProjects,
+      researchGrants, ugcJournals, indexedJournals, conferences, booksChapters,
+      reviewerEditorial, patentsCopyrights, developmentActs, consultancyRows,
+      awardsRows, otherAchievements,
+      personalAttributes,
+      sec1Total, sec2Total, sec3Total, sec4Total, sec5Total,
+      sec6Total, sec7Total, sec8Total, sec9Total, sec10Total,
+      grandTotal,
+      titleNameFallback,
+    });
   };
 
   return (
@@ -625,7 +664,7 @@ export default function StandardMyAppraisal({
         <div>
           {/* PART A: GENERAL INFORMATION */}
           {hodAppraisalTab === "partA" && (
-            <SC title="PART A: General Information and Academic Background" accent="#4f46e5">
+            <SC title="PART A: General Information and Academic Background" accent="#4f46e5" hideGuideline>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
                 <div>
                   <label style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#374151", marginBottom: 4 }}>Full Name (in Block Letters)</label>
@@ -691,7 +730,7 @@ export default function StandardMyAppraisal({
 
           {/* SECTION 1: TEACHING-LEARNING PROCESS */}
           {hodAppraisalTab === "sec1" && (
-            <SC title="1. Teaching-Learning Process (50 Marks)" accent="#4f46e5" scoreBadge={`${sec1Total.toFixed(1)} / 50`}>
+            <SC title="1. Teaching-Learning Process (50 Marks)" accent="#4f46e5" scoreBadge={`${sec1Total.toFixed(1)} / 50`} hideGuideline>
               <SubsectionTitle>A) Teaching Workload (Core Competency) (40 Marks)</SubsectionTitle>
               <div style={{ background: "#f8fafc", padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 12, color: "#475569" }}>
                 <strong>Grading Criteria (Per Sem, Max 20 Marks):</strong> 85% & above = 20 Marks | 75%-84.99% = 15 Marks | 60%-74.99% = 12 Marks | 50%-59.99% = 10 Marks | Below 50% = 0 Marks.
@@ -717,7 +756,6 @@ export default function StandardMyAppraisal({
                       const p = Number(r.planned) || 0;
                       const c = Number(r.conducted) || 0;
                       const pct = p > 0 ? ((c / p) * 100).toFixed(1) : "0.0";
-                      const sc = calcWorkloadRowScore(r.planned, r.conducted);
                       return (
                         <tr key={i}>
                           <td style={TDC}>{i + 1}</td>
@@ -726,14 +764,14 @@ export default function StandardMyAppraisal({
                           <td style={TDC}><TI val={r.planned} onChange={(v) => setSem1Workload((p) => p.map((row, j) => j === i ? { ...row, planned: v } : row))} center numeric placeholder="Planned" /></td>
                           <td style={TDC}><TI val={r.conducted} onChange={(v) => setSem1Workload((p) => p.map((row, j) => j === i ? { ...row, conducted: v } : row))} center numeric placeholder="Conducted" /></td>
                           <td style={{ ...TDC, fontWeight: 700 }}>{pct}%</td>
-                          <td style={TDS}>{sc}</td>
+                          <td style={TDS}><TI val={r.score} onChange={(v) => setSem1Workload((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={20} placeholder="0-20" /></td>
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
                 <RowBtns
-                  onAdd={() => setSem1Workload((p) => [...p, { class: "", subject: "", planned: "", conducted: "" }])}
+                  onAdd={() => setSem1Workload((p) => [...p, { class: "", subject: "", planned: "", conducted: "", score: "" }])}
                   onDel={() => setSem1Workload((p) => p.length > 1 ? p.slice(0, -1) : p)}
                   canDel={sem1Workload.length > 1}
                 />
@@ -759,7 +797,6 @@ export default function StandardMyAppraisal({
                       const p = Number(r.planned) || 0;
                       const c = Number(r.conducted) || 0;
                       const pct = p > 0 ? ((c / p) * 100).toFixed(1) : "0.0";
-                      const sc = calcWorkloadRowScore(r.planned, r.conducted);
                       return (
                         <tr key={i}>
                           <td style={TDC}>{i + 1}</td>
@@ -768,14 +805,14 @@ export default function StandardMyAppraisal({
                           <td style={TDC}><TI val={r.planned} onChange={(v) => setSem2Workload((p) => p.map((row, j) => j === i ? { ...row, planned: v } : row))} center numeric placeholder="Planned" /></td>
                           <td style={TDC}><TI val={r.conducted} onChange={(v) => setSem2Workload((p) => p.map((row, j) => j === i ? { ...row, conducted: v } : row))} center numeric placeholder="Conducted" /></td>
                           <td style={{ ...TDC, fontWeight: 700 }}>{pct}%</td>
-                          <td style={TDS}>{sc}</td>
+                          <td style={TDS}><TI val={r.score} onChange={(v) => setSem2Workload((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={20} placeholder="0-20" /></td>
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
                 <RowBtns
-                  onAdd={() => setSem2Workload((p) => [...p, { class: "", subject: "", planned: "", conducted: "" }])}
+                  onAdd={() => setSem2Workload((p) => [...p, { class: "", subject: "", planned: "", conducted: "", score: "" }])}
                   onDel={() => setSem2Workload((p) => p.length > 1 ? p.slice(0, -1) : p)}
                   canDel={sem2Workload.length > 1}
                 />
@@ -804,13 +841,13 @@ export default function StandardMyAppraisal({
                         <td style={TD}><TI val={r.subject} onChange={(v) => setEContentRows((p) => p.map((row, j) => j === i ? { ...row, subject: v } : row))} placeholder="Subject Name" /></td>
                         <td style={TD}><TI val={r.topic} onChange={(v) => setEContentRows((p) => p.map((row, j) => j === i ? { ...row, topic: v } : row))} placeholder="Topic Name" /></td>
                         <td style={TD}><TI val={r.link} onChange={(v) => setEContentRows((p) => p.map((row, j) => j === i ? { ...row, link: v } : row))} placeholder="URL / Link" /></td>
-                        <td style={TDS}><TI val={r.score} onChange={(v) => setEContentRows((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric placeholder="3" /></td>
+                        <td style={TDS}><TI val={r.score} onChange={(v) => setEContentRows((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={3} placeholder="0-3" /></td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
                 <RowBtns
-                  onAdd={() => setEContentRows((p) => [...p, { subject: "", topic: "", link: "", score: "3" }])}
+                  onAdd={() => setEContentRows((p) => [...p, { subject: "", topic: "", link: "", score: "" }])}
                   onDel={() => setEContentRows((p) => p.length > 1 ? p.slice(0, -1) : p)}
                   canDel={eContentRows.length > 1}
                 />
@@ -842,7 +879,7 @@ export default function StandardMyAppraisal({
                   </tbody>
                 </table>
                 <RowBtns
-                  onAdd={() => setInnovRows((p) => [...p, { subject: "", innovation: "", description: "", score: "2" }])}
+                  onAdd={() => setInnovRows((p) => [...p, { subject: "", innovation: "", description: "", score: "" }])}
                   onDel={() => setInnovRows((p) => p.length > 1 ? p.slice(0, -1) : p)}
                   canDel={innovRows.length > 1}
                 />
@@ -853,20 +890,24 @@ export default function StandardMyAppraisal({
 
           {/* SECTION 2: FEEDBACK FROM STUDENTS */}
           {hodAppraisalTab === "sec2" && (
-            <SC title="2. Feedback from Students (10 Marks)" accent="#0891b2" scoreBadge={`${sec2Total.toFixed(1)} / 10`}>
+            <SC title="2. Feedback from Students (10 Marks)" accent="#0891b2" scoreBadge={`${sec2Total.toFixed(1)} / 10`} hideGuideline>
               <div style={{ background: "#f8fafc", padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 12, color: "#475569" }}>
                 <strong>Grading Criteria (Per Semester, Max 5 Marks):</strong> 85% & above = 5 | 75%-84.99% = 4 | 70%-74.99% = 3 | 65%-69.99% = 2 | 60%-64.99% = 1 | Below 60% = 0.
               </div>
 
               {/* Sem I */}
               <div style={{ marginBottom: 20 }}>
-                <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: "#1e1b4b" }}>Sem I (05 Marks) — Self Score: {sem1FeedbackScore}</h4>
+                <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: "#1e1b4b" }}>Sem I (05 Marks)</h4>
                 <table style={T}>
                   <thead>
                     <tr>
                       <th style={TH}>Sr. No.</th>
                       <th style={TH}>Subject Name</th>
-                      <th style={TH}>Feedback %</th>
+                      <th style={TH}>Feedback</th>
+                      <th style={TH}>Average Feedback</th>
+                      <th style={TH}>Self-Appraisal Score</th>
+                      <th style={TH}>HOD Score</th>
+                      <th style={TH}>Committee Score</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -875,6 +916,16 @@ export default function StandardMyAppraisal({
                         <td style={TDC}>{i + 1}</td>
                         <td style={TD}><TI val={r.subject} onChange={(v) => setSem1Feedback((p) => p.map((row, j) => j === i ? { ...row, subject: v } : row))} placeholder="Subject Name" /></td>
                         <td style={TDC}><TI val={r.feedbackPct} onChange={(v) => setSem1Feedback((p) => p.map((row, j) => j === i ? { ...row, feedbackPct: v } : row))} center numeric placeholder="Feedback %" /></td>
+                        {i === 0 && (
+                          <>
+                            <td style={TDC} rowSpan={sem1Feedback.length}>{sem1AvgFeedback || "-"}</td>
+                            <td style={TDS} rowSpan={sem1Feedback.length}>
+                              <TI val={sem1FeedbackSelfScore} onChange={setSem1FeedbackSelfScore} center numeric max={5} placeholder="0-5" />
+                            </td>
+                            <td style={TDC} rowSpan={sem1Feedback.length}><RO placeholder="-" center /></td>
+                            <td style={TDC} rowSpan={sem1Feedback.length}><RO placeholder="-" center /></td>
+                          </>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -888,13 +939,17 @@ export default function StandardMyAppraisal({
 
               {/* Sem II */}
               <div>
-                <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: "#1e1b4b" }}>Sem II (05 Marks) — Self Score: {sem2FeedbackScore}</h4>
+                <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: "#1e1b4b" }}>Sem II (05 Marks)</h4>
                 <table style={T}>
                   <thead>
                     <tr>
                       <th style={TH}>Sr. No.</th>
                       <th style={TH}>Subject Name</th>
-                      <th style={TH}>Feedback %</th>
+                      <th style={TH}>Feedback</th>
+                      <th style={TH}>Average Feedback</th>
+                      <th style={TH}>Self-Appraisal Score</th>
+                      <th style={TH}>HOD Score</th>
+                      <th style={TH}>Committee Score</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -903,6 +958,16 @@ export default function StandardMyAppraisal({
                         <td style={TDC}>{i + 1}</td>
                         <td style={TD}><TI val={r.subject} onChange={(v) => setSem2Feedback((p) => p.map((row, j) => j === i ? { ...row, subject: v } : row))} placeholder="Subject Name" /></td>
                         <td style={TDC}><TI val={r.feedbackPct} onChange={(v) => setSem2Feedback((p) => p.map((row, j) => j === i ? { ...row, feedbackPct: v } : row))} center numeric placeholder="Feedback %" /></td>
+                        {i === 0 && (
+                          <>
+                            <td style={TDC} rowSpan={sem2Feedback.length}>{sem2AvgFeedback || "-"}</td>
+                            <td style={TDS} rowSpan={sem2Feedback.length}>
+                              <TI val={sem2FeedbackSelfScore} onChange={setSem2FeedbackSelfScore} center numeric max={5} placeholder="0-5" />
+                            </td>
+                            <td style={TDC} rowSpan={sem2Feedback.length}><RO placeholder="-" center /></td>
+                            <td style={TDC} rowSpan={sem2Feedback.length}><RO placeholder="-" center /></td>
+                          </>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -919,7 +984,7 @@ export default function StandardMyAppraisal({
 
           {/* SECTION 3: ADMINISTRATIVE RESPONSIBILITIES */}
           {hodAppraisalTab === "sec3" && (
-            <SC title="3. Administrative / Executive Responsibilities (20 Marks)" accent="#059669" scoreBadge={`${sec3Total.toFixed(1)} / 20`}>
+            <SC title="3. Administrative / Executive Responsibilities (20 Marks)" accent="#059669" scoreBadge={`${sec3Total.toFixed(1)} / 20`} hideGuideline>
               <div style={{ background: "#f8fafc", padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 12, color: "#475569" }}>
                 <strong>Scoring Rules:</strong> Institute Level Coordinator/Head = 10 Marks | Institute Level Member = 03 Marks | Department Level Coordinator = 05 Marks | Department Level Member = 01 Mark. Total capped at 20 Marks.
               </div>
@@ -938,7 +1003,7 @@ export default function StandardMyAppraisal({
                   </thead>
                   <tbody>
                     {instAdmin.map((r, i) => {
-                      const sc = r.role === "Institute Level Coordinator/Head" ? 10 : 3;
+                      const rowMax = r.role === "Institute Level Coordinator/Head" ? 10 : 3;
                       return (
                         <tr key={i}>
                           <td style={TDC}>{i + 1}</td>
@@ -949,14 +1014,14 @@ export default function StandardMyAppraisal({
                               <option value="Institute Level Member">Institute Level Member (03 Marks)</option>
                             </select>
                           </td>
-                          <td style={TDS}>{sc}</td>
+                          <td style={TDS}><TI val={r.score} onChange={(v) => setInstAdmin((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={rowMax} placeholder={`0-${rowMax}`} /></td>
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
                 <RowBtns
-                  onAdd={() => setInstAdmin((p) => [...p, { name: "", role: "Institute Level Coordinator/Head" }])}
+                  onAdd={() => setInstAdmin((p) => [...p, { name: "", role: "Institute Level Coordinator/Head", score: "" }])}
                   onDel={() => setInstAdmin((p) => p.length > 1 ? p.slice(0, -1) : p)}
                   canDel={instAdmin.length > 1}
                 />
@@ -976,7 +1041,7 @@ export default function StandardMyAppraisal({
                   </thead>
                   <tbody>
                     {deptAdmin.map((r, i) => {
-                      const sc = r.role === "Department Level Coordinator" ? 5 : 1;
+                      const rowMax = r.role === "Department Level Coordinator" ? 5 : 1;
                       return (
                         <tr key={i}>
                           <td style={TDC}>{i + 1}</td>
@@ -987,14 +1052,14 @@ export default function StandardMyAppraisal({
                               <option value="Department Level Member">Department Level Member (01 Mark)</option>
                             </select>
                           </td>
-                          <td style={TDS}>{sc}</td>
+                          <td style={TDS}><TI val={r.score} onChange={(v) => setDeptAdmin((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={rowMax} placeholder={`0-${rowMax}`} /></td>
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
                 <RowBtns
-                  onAdd={() => setDeptAdmin((p) => [...p, { name: "", role: "Department Level Coordinator" }])}
+                  onAdd={() => setDeptAdmin((p) => [...p, { name: "", role: "Department Level Coordinator", score: "" }])}
                   onDel={() => setDeptAdmin((p) => p.length > 1 ? p.slice(0, -1) : p)}
                   canDel={deptAdmin.length > 1}
                 />
@@ -1005,12 +1070,12 @@ export default function StandardMyAppraisal({
 
           {/* SECTION 4: EVALUATION AND ASSESSMENT */}
           {hodAppraisalTab === "sec4" && (
-            <SC title="4. Evaluation and Assessment (20 Marks)" accent="#d97706" scoreBadge={`${sec4Total.toFixed(1)} / 20`}>
+            <SC title="4. Evaluation and Assessment (20 Marks)" accent="#d97706" scoreBadge={`${sec4Total.toFixed(1)} / 20`} hideGuideline>
               <SubsectionTitle>A) Result Analysis (14 Marks - 07 Marks per Sem)</SubsectionTitle>
 
               {/* Sem I */}
               <div style={{ marginBottom: 20 }}>
-                <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: "#1e1b4b" }}>Sem I (07 Marks) — Self Score: {sem1ResultScore}</h4>
+                <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: "#1e1b4b" }}>Sem I (07 Marks)</h4>
                 <table style={T}>
                   <thead>
                     <tr>
@@ -1023,29 +1088,26 @@ export default function StandardMyAppraisal({
                     </tr>
                   </thead>
                   <tbody>
-                    {sem1Results.map((r, i) => {
-                      const sc = calcResultAnalysisRowScore(r.passingPct, r.difficulty);
-                      return (
-                        <tr key={i}>
-                          <td style={TDC}>{i + 1}</td>
-                          <td style={TD}><TI val={r.subject} onChange={(v) => setSem1Results((p) => p.map((row, j) => j === i ? { ...row, subject: v } : row))} placeholder="Subject Name" /></td>
-                          <td style={TDC}><TI val={r.passingPct} onChange={(v) => setSem1Results((p) => p.map((row, j) => j === i ? { ...row, passingPct: v } : row))} center numeric placeholder="Passing %" /></td>
-                          <td style={TDC}><TI val={r.prevYearResult} onChange={(v) => setSem1Results((p) => p.map((row, j) => j === i ? { ...row, prevYearResult: v } : row))} center numeric placeholder="Prev %" /></td>
-                          <td style={TD}>
-                            <select value={r.difficulty} onChange={(e) => setSem1Results((p) => p.map((row, j) => j === i ? { ...row, difficulty: e.target.value } : row))} style={{ width: "100%", height: 32, border: "1px solid #cbd5e1", borderRadius: 4 }}>
-                              <option value="Easy">Easy Subject</option>
-                              <option value="Medium">Medium Subject</option>
-                              <option value="High">High / Difficult Subject</option>
-                            </select>
-                          </td>
-                          <td style={TDS}>{sc}</td>
-                        </tr>
-                      );
-                    })}
+                    {sem1Results.map((r, i) => (
+                      <tr key={i}>
+                        <td style={TDC}>{i + 1}</td>
+                        <td style={TD}><TI val={r.subject} onChange={(v) => setSem1Results((p) => p.map((row, j) => j === i ? { ...row, subject: v } : row))} placeholder="Subject Name" /></td>
+                        <td style={TDC}><TI val={r.passingPct} onChange={(v) => setSem1Results((p) => p.map((row, j) => j === i ? { ...row, passingPct: v } : row))} center numeric placeholder="Passing %" /></td>
+                        <td style={TDC}><TI val={r.prevYearResult} onChange={(v) => setSem1Results((p) => p.map((row, j) => j === i ? { ...row, prevYearResult: v } : row))} center numeric placeholder="Prev %" /></td>
+                        <td style={TD}>
+                          <select value={r.difficulty} onChange={(e) => setSem1Results((p) => p.map((row, j) => j === i ? { ...row, difficulty: e.target.value } : row))} style={{ width: "100%", height: 32, border: "1px solid #cbd5e1", borderRadius: 4 }}>
+                            <option value="Easy">Easy Subject</option>
+                            <option value="Medium">Medium Subject</option>
+                            <option value="High">High / Difficult Subject</option>
+                          </select>
+                        </td>
+                        <td style={TDS}><TI val={r.score} onChange={(v) => setSem1Results((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={7} placeholder="0-7" /></td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
                 <RowBtns
-                  onAdd={() => setSem1Results((p) => [...p, { subject: "", passingPct: "", prevYearResult: "", difficulty: "Easy" }])}
+                  onAdd={() => setSem1Results((p) => [...p, { subject: "", passingPct: "", prevYearResult: "", difficulty: "Easy", score: "" }])}
                   onDel={() => setSem1Results((p) => p.length > 1 ? p.slice(0, -1) : p)}
                   canDel={sem1Results.length > 1}
                 />
@@ -1053,7 +1115,7 @@ export default function StandardMyAppraisal({
 
               {/* Sem II */}
               <div style={{ marginBottom: 20 }}>
-                <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: "#1e1b4b" }}>Sem II (07 Marks) — Self Score: {sem2ResultScore}</h4>
+                <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: "#1e1b4b" }}>Sem II (07 Marks)</h4>
                 <table style={T}>
                   <thead>
                     <tr>
@@ -1066,29 +1128,26 @@ export default function StandardMyAppraisal({
                     </tr>
                   </thead>
                   <tbody>
-                    {sem2Results.map((r, i) => {
-                      const sc = calcResultAnalysisRowScore(r.passingPct, r.difficulty);
-                      return (
-                        <tr key={i}>
-                          <td style={TDC}>{i + 1}</td>
-                          <td style={TD}><TI val={r.subject} onChange={(v) => setSem2Results((p) => p.map((row, j) => j === i ? { ...row, subject: v } : row))} placeholder="Subject Name" /></td>
-                          <td style={TDC}><TI val={r.passingPct} onChange={(v) => setSem2Results((p) => p.map((row, j) => j === i ? { ...row, passingPct: v } : row))} center numeric placeholder="Passing %" /></td>
-                          <td style={TDC}><TI val={r.prevYearResult} onChange={(v) => setSem2Results((p) => p.map((row, j) => j === i ? { ...row, prevYearResult: v } : row))} center numeric placeholder="Prev %" /></td>
-                          <td style={TD}>
-                            <select value={r.difficulty} onChange={(e) => setSem2Results((p) => p.map((row, j) => j === i ? { ...row, difficulty: e.target.value } : row))} style={{ width: "100%", height: 32, border: "1px solid #cbd5e1", borderRadius: 4 }}>
-                              <option value="Easy">Easy Subject</option>
-                              <option value="Medium">Medium Subject</option>
-                              <option value="High">High / Difficult Subject</option>
-                            </select>
-                          </td>
-                          <td style={TDS}>{sc}</td>
-                        </tr>
-                      );
-                    })}
+                    {sem2Results.map((r, i) => (
+                      <tr key={i}>
+                        <td style={TDC}>{i + 1}</td>
+                        <td style={TD}><TI val={r.subject} onChange={(v) => setSem2Results((p) => p.map((row, j) => j === i ? { ...row, subject: v } : row))} placeholder="Subject Name" /></td>
+                        <td style={TDC}><TI val={r.passingPct} onChange={(v) => setSem2Results((p) => p.map((row, j) => j === i ? { ...row, passingPct: v } : row))} center numeric placeholder="Passing %" /></td>
+                        <td style={TDC}><TI val={r.prevYearResult} onChange={(v) => setSem2Results((p) => p.map((row, j) => j === i ? { ...row, prevYearResult: v } : row))} center numeric placeholder="Prev %" /></td>
+                        <td style={TD}>
+                          <select value={r.difficulty} onChange={(e) => setSem2Results((p) => p.map((row, j) => j === i ? { ...row, difficulty: e.target.value } : row))} style={{ width: "100%", height: 32, border: "1px solid #cbd5e1", borderRadius: 4 }}>
+                            <option value="Easy">Easy Subject</option>
+                            <option value="Medium">Medium Subject</option>
+                            <option value="High">High / Difficult Subject</option>
+                          </select>
+                        </td>
+                        <td style={TDS}><TI val={r.score} onChange={(v) => setSem2Results((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={7} placeholder="0-7" /></td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
                 <RowBtns
-                  onAdd={() => setSem2Results((p) => [...p, { subject: "", passingPct: "", prevYearResult: "", difficulty: "Easy" }])}
+                  onAdd={() => setSem2Results((p) => [...p, { subject: "", passingPct: "", prevYearResult: "", difficulty: "Easy", score: "" }])}
                   onDel={() => setSem2Results((p) => p.length > 1 ? p.slice(0, -1) : p)}
                   canDel={sem2Results.length > 1}
                 />
@@ -1112,7 +1171,7 @@ export default function StandardMyAppraisal({
                       <td style={{ ...TD, fontWeight: 700 }}>{r.duty}</td>
                       <td style={TD}><TI val={r.details} onChange={(v) => setExamDuties((p) => p.map((row, j) => j === i ? { ...row, details: v } : row))} placeholder="Details of Duty" /></td>
                       <td style={TDS}>
-                        <TI val={r.score} onChange={(v) => setExamDuties((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric placeholder="0 or 2" />
+                        <TI val={r.score} onChange={(v) => setExamDuties((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={2} placeholder="0-2" />
                       </td>
                     </tr>
                   ))}
@@ -1124,7 +1183,7 @@ export default function StandardMyAppraisal({
 
           {/* SECTION 5: EXTENSION AND OUTREACH */}
           {hodAppraisalTab === "sec5" && (
-            <SC title="5. Extension and Outreach Activities (10 Marks)" accent="#dc2626" scoreBadge={`${sec5Total.toFixed(1)} / 10`}>
+            <SC title="5. Extension and Outreach Activities (10 Marks)" accent="#dc2626" scoreBadge={`${sec5Total.toFixed(1)} / 10`} hideGuideline>
               <div style={{ background: "#f8fafc", padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 12, color: "#475569" }}>
                 Participation in Field work, Field based activity, Industrial visit, Site visit, NSS/NCC, etc. (05 Marks each activity). Max 10 Marks.
               </div>
@@ -1147,13 +1206,13 @@ export default function StandardMyAppraisal({
                       <td style={TDC}><TI val={r.hours} onChange={(v) => setExtensionActs((p) => p.map((row, j) => j === i ? { ...row, hours: v } : row))} center numeric placeholder="Hours" /></td>
                       <td style={TDC}><TI val={r.dateFrom} onChange={(v) => setExtensionActs((p) => p.map((row, j) => j === i ? { ...row, dateFrom: v } : row))} center placeholder="DD/MM/YYYY" /></td>
                       <td style={TDC}><TI val={r.dateTo} onChange={(v) => setExtensionActs((p) => p.map((row, j) => j === i ? { ...row, dateTo: v } : row))} center placeholder="DD/MM/YYYY" /></td>
-                      <td style={TDS}><TI val={r.score} onChange={(v) => setExtensionActs((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric placeholder="5" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setExtensionActs((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={5} placeholder="0-5" /></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
               <RowBtns
-                onAdd={() => setExtensionActs((p) => [...p, { particular: "", hours: "", dateFrom: "", dateTo: "", score: "5" }])}
+                onAdd={() => setExtensionActs((p) => [...p, { particular: "", hours: "", dateFrom: "", dateTo: "", score: "" }])}
                 onDel={() => setExtensionActs((p) => p.length > 1 ? p.slice(0, -1) : p)}
                 canDel={extensionActs.length > 1}
               />
@@ -1163,7 +1222,7 @@ export default function StandardMyAppraisal({
 
           {/* SECTION 6: DOMAIN SPECIFIC ACTIVITIES */}
           {hodAppraisalTab === "sec6" && (
-            <SC title="6. Domain Specific Activities (60 Marks)" accent="#7c3aed" scoreBadge={`${sec6Total.toFixed(1)} / 60`}>
+            <SC title="6. Domain Specific Activities (60 Marks)" accent="#7c3aed" scoreBadge={`${sec6Total.toFixed(1)} / 60`} hideGuideline>
               {/* A) OBE */}
               <SubsectionTitle>A) Outcome Based Education (OBE) Implementation (20 Marks - 04 Marks each)</SubsectionTitle>
               <table style={T}>
@@ -1186,7 +1245,7 @@ export default function StandardMyAppraisal({
                           <option value="No">No (0 Marks)</option>
                         </select>
                       </td>
-                      <td style={TDS}>{r.available === "Yes" ? 4 : 0}</td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setObeRows((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={4} placeholder="0-4" /></td>
                     </tr>
                   ))}
                 </tbody>
@@ -1211,13 +1270,13 @@ export default function StandardMyAppraisal({
                       <td style={TD}><TI val={r.event} onChange={(v) => setPartEvents((p) => p.map((row, j) => j === i ? { ...row, event: v } : row))} placeholder="Name of Event" /></td>
                       <td style={TD}><TI val={r.organizedBy} onChange={(v) => setPartEvents((p) => p.map((row, j) => j === i ? { ...row, organizedBy: v } : row))} placeholder="Organized By" /></td>
                       <td style={TD}><TI val={r.dateDuration} onChange={(v) => setPartEvents((p) => p.map((row, j) => j === i ? { ...row, dateDuration: v } : row))} placeholder="Date / Duration" /></td>
-                      <td style={TDS}><TI val={r.score} onChange={(v) => setPartEvents((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric placeholder="5" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setPartEvents((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={5} placeholder="0-5" /></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
               <RowBtns
-                onAdd={() => setPartEvents((p) => [...p, { event: "", organizedBy: "", dateDuration: "", score: "5" }])}
+                onAdd={() => setPartEvents((p) => [...p, { event: "", organizedBy: "", dateDuration: "", score: "" }])}
                 onDel={() => setPartEvents((p) => p.length > 1 ? p.slice(0, -1) : p)}
                 canDel={partEvents.length > 1}
               />
@@ -1247,7 +1306,7 @@ export default function StandardMyAppraisal({
                 </tbody>
               </table>
               <RowBtns
-                onAdd={() => setCondEvents((p) => [...p, { event: "", date: "", duration: "", score: "5" }])}
+                onAdd={() => setCondEvents((p) => [...p, { event: "", date: "", duration: "", score: "" }])}
                 onDel={() => setCondEvents((p) => p.length > 1 ? p.slice(0, -1) : p)}
                 canDel={condEvents.length > 1}
               />
@@ -1270,7 +1329,7 @@ export default function StandardMyAppraisal({
                 </thead>
                 <tbody>
                   {invitedTeachers.map((r, i) => {
-                    const pts = r.level === "International" ? 5 : r.level === "National" ? 3 : r.level === "State" ? 2 : 1;
+                    const rowMax = r.level === "International" ? 5 : r.level === "National" ? 3 : r.level === "State" ? 2 : 1;
                     return (
                       <tr key={i}>
                         <td style={TDC}>{i + 1}</td>
@@ -1285,14 +1344,14 @@ export default function StandardMyAppraisal({
                             <option value="International">International (5 Marks)</option>
                           </select>
                         </td>
-                        <td style={TDS}>{pts}</td>
+                        <td style={TDS}><TI val={r.score} onChange={(v) => setInvitedTeachers((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={rowMax} placeholder={`0-${rowMax}`} /></td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
               <RowBtns
-                onAdd={() => setInvitedTeachers((p) => [...p, { event: "", organizedBy: "", dateDuration: "", level: "University" }])}
+                onAdd={() => setInvitedTeachers((p) => [...p, { event: "", organizedBy: "", dateDuration: "", level: "University", score: "" }])}
                 onDel={() => setInvitedTeachers((p) => p.length > 1 ? p.slice(0, -1) : p)}
                 canDel={invitedTeachers.length > 1}
               />
@@ -1318,13 +1377,13 @@ export default function StandardMyAppraisal({
                       <td style={TD}><TI val={r.duration} onChange={(v) => setNptelCerts((p) => p.map((row, j) => j === i ? { ...row, duration: v } : row))} placeholder="e.g. 12 Weeks" /></td>
                       <td style={TDC}><TI val={r.dateCompletion} onChange={(v) => setNptelCerts((p) => p.map((row, j) => j === i ? { ...row, dateCompletion: v } : row))} center placeholder="MM/YYYY" /></td>
                       <td style={TDC}><TI val={r.pctScore} onChange={(v) => setNptelCerts((p) => p.map((row, j) => j === i ? { ...row, pctScore: v } : row))} center placeholder="%" /></td>
-                      <td style={TDS}><TI val={r.score} onChange={(v) => setNptelCerts((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric placeholder="5" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setNptelCerts((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={5} placeholder="0-5" /></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
               <RowBtns
-                onAdd={() => setNptelCerts((p) => [...p, { subject: "", duration: "", dateCompletion: "", pctScore: "", score: "5" }])}
+                onAdd={() => setNptelCerts((p) => [...p, { subject: "", duration: "", dateCompletion: "", pctScore: "", score: "" }])}
                 onDel={() => setNptelCerts((p) => p.length > 1 ? p.slice(0, -1) : p)}
                 canDel={nptelCerts.length > 1}
               />
@@ -1334,7 +1393,7 @@ export default function StandardMyAppraisal({
 
           {/* SECTION 7: STUDENT MENTORING */}
           {hodAppraisalTab === "sec7" && (
-            <SC title="7. Student Mentoring (20 Marks)" accent="#2563eb" scoreBadge={`${sec7Total.toFixed(1)} / 20`}>
+            <SC title="7. Student Mentoring (20 Marks)" accent="#2563eb" scoreBadge={`${sec7Total.toFixed(1)} / 20`} hideGuideline>
               {/* A) Internship */}
               <SubsectionTitle>A) Student Internship under guidance (10 Marks - 05 Marks each)</SubsectionTitle>
               <table style={T}>
@@ -1361,13 +1420,13 @@ export default function StandardMyAppraisal({
                           <option value="No">No (0 Marks)</option>
                         </select>
                       </td>
-                      <td style={TDS}>{r.progressReport === "Yes" ? 5 : 0}</td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setInternships((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={5} placeholder="0-5" /></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
               <RowBtns
-                onAdd={() => setInternships((p) => [...p, { studentName: "", industryName: "", stipendDuration: "", progressReport: "No" }])}
+                onAdd={() => setInternships((p) => [...p, { studentName: "", industryName: "", stipendDuration: "", progressReport: "No", score: "" }])}
                 onDel={() => setInternships((p) => p.length > 1 ? p.slice(0, -1) : p)}
                 canDel={internships.length > 1}
               />
@@ -1386,23 +1445,20 @@ export default function StandardMyAppraisal({
                   </tr>
                 </thead>
                 <tbody>
-                  {mentoringRows.map((r, i) => {
-                    const sc = Math.min(10, (Number(r.totalMeetings) || 0) * 2.5);
-                    return (
-                      <tr key={i}>
-                        <td style={TDC}>{i + 1}</td>
-                        <td style={TD}><TI val={r.classDiv} onChange={(v) => setMentoringRows((p) => p.map((row, j) => j === i ? { ...row, classDiv: v } : row))} placeholder="Class & Div" /></td>
-                        <td style={TDC}><TI val={r.numStudents} onChange={(v) => setMentoringRows((p) => p.map((row, j) => j === i ? { ...row, numStudents: v } : row))} center numeric placeholder="Count" /></td>
-                        <td style={TD}><TI val={r.freqMeetings} onChange={(v) => setMentoringRows((p) => p.map((row, j) => j === i ? { ...row, freqMeetings: v } : row))} placeholder="e.g. Monthly" /></td>
-                        <td style={TDC}><TI val={r.totalMeetings} onChange={(v) => setMentoringRows((p) => p.map((row, j) => j === i ? { ...row, totalMeetings: v } : row))} center numeric placeholder="Total Meetings" /></td>
-                        <td style={TDS}>{sc}</td>
-                      </tr>
-                    );
-                  })}
+                  {mentoringRows.map((r, i) => (
+                    <tr key={i}>
+                      <td style={TDC}>{i + 1}</td>
+                      <td style={TD}><TI val={r.classDiv} onChange={(v) => setMentoringRows((p) => p.map((row, j) => j === i ? { ...row, classDiv: v } : row))} placeholder="Class & Div" /></td>
+                      <td style={TDC}><TI val={r.numStudents} onChange={(v) => setMentoringRows((p) => p.map((row, j) => j === i ? { ...row, numStudents: v } : row))} center numeric placeholder="Count" /></td>
+                      <td style={TD}><TI val={r.freqMeetings} onChange={(v) => setMentoringRows((p) => p.map((row, j) => j === i ? { ...row, freqMeetings: v } : row))} placeholder="e.g. Monthly" /></td>
+                      <td style={TDC}><TI val={r.totalMeetings} onChange={(v) => setMentoringRows((p) => p.map((row, j) => j === i ? { ...row, totalMeetings: v } : row))} center numeric placeholder="Total Meetings" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setMentoringRows((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={10} placeholder="0-10" /></td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
               <RowBtns
-                onAdd={() => setMentoringRows((p) => [...p, { classDiv: "", numStudents: "", freqMeetings: "", totalMeetings: "" }])}
+                onAdd={() => setMentoringRows((p) => [...p, { classDiv: "", numStudents: "", freqMeetings: "", totalMeetings: "", score: "" }])}
                 onDel={() => setMentoringRows((p) => p.length > 1 ? p.slice(0, -1) : p)}
                 canDel={mentoringRows.length > 1}
               />
@@ -1412,7 +1468,7 @@ export default function StandardMyAppraisal({
 
           {/* SECTION 8: COLLABORATIONS */}
           {hodAppraisalTab === "sec8" && (
-            <SC title="8. Collaborations (20 Marks)" accent="#0d9488" scoreBadge={`${sec8Total.toFixed(1)} / 20`}>
+            <SC title="8. Collaborations (20 Marks)" accent="#0d9488" scoreBadge={`${sec8Total.toFixed(1)} / 20`} hideGuideline>
               {/* A) Collaborative activities */}
               <SubsectionTitle>A) Collaborative activities during the year (10 Marks - 05 Marks each)</SubsectionTitle>
               <div style={{ background: "#f8fafc", padding: 10, borderRadius: 6, marginBottom: 10, fontSize: 12, color: "#475569" }}>
@@ -1435,13 +1491,13 @@ export default function StandardMyAppraisal({
                       <td style={TD}><TI val={r.particular} onChange={(v) => setCollaborations((p) => p.map((row, j) => j === i ? { ...row, particular: v } : row))} placeholder="Particulars of Activity" /></td>
                       <td style={TD}><TI val={r.industryName} onChange={(v) => setCollaborations((p) => p.map((row, j) => j === i ? { ...row, industryName: v } : row))} placeholder="Industry / Institute Name" /></td>
                       <td style={TD}><TI val={r.nature} onChange={(v) => setCollaborations((p) => p.map((row, j) => j === i ? { ...row, nature: v } : row))} placeholder="Nature of Collaboration" /></td>
-                      <td style={TDS}><TI val={r.score} onChange={(v) => setCollaborations((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric placeholder="5" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setCollaborations((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={5} placeholder="0-5" /></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
               <RowBtns
-                onAdd={() => setCollaborations((p) => [...p, { particular: "", industryName: "", nature: "", score: "5" }])}
+                onAdd={() => setCollaborations((p) => [...p, { particular: "", industryName: "", nature: "", score: "" }])}
                 onDel={() => setCollaborations((p) => p.length > 1 ? p.slice(0, -1) : p)}
                 canDel={collaborations.length > 1}
               />
@@ -1465,13 +1521,13 @@ export default function StandardMyAppraisal({
                       <td style={TD}><TI val={r.projectTitle} onChange={(v) => setSponsoredProjects((p) => p.map((row, j) => j === i ? { ...row, projectTitle: v } : row))} placeholder="Project Title" /></td>
                       <td style={TDC}><TI val={r.amount} onChange={(v) => setSponsoredProjects((p) => p.map((row, j) => j === i ? { ...row, amount: v } : row))} center placeholder="Amount (Rs)" /></td>
                       <td style={TD}><TI val={r.sponsoringAgency} onChange={(v) => setSponsoredProjects((p) => p.map((row, j) => j === i ? { ...row, sponsoringAgency: v } : row))} placeholder="Sponsoring Agency" /></td>
-                      <td style={TDS}><TI val={r.score} onChange={(v) => setSponsoredProjects((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric placeholder="5" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setSponsoredProjects((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={5} placeholder="0-5" /></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
               <RowBtns
-                onAdd={() => setSponsoredProjects((p) => [...p, { projectTitle: "", amount: "", sponsoringAgency: "", score: "5" }])}
+                onAdd={() => setSponsoredProjects((p) => [...p, { projectTitle: "", amount: "", sponsoringAgency: "", score: "" }])}
                 onDel={() => setSponsoredProjects((p) => p.length > 1 ? p.slice(0, -1) : p)}
                 canDel={sponsoredProjects.length > 1}
               />
@@ -1481,7 +1537,7 @@ export default function StandardMyAppraisal({
 
           {/* SECTION 9: RESEARCH ACTIVITY */}
           {hodAppraisalTab === "sec9" && (
-            <SC title="9. Research Activity (80 Marks)" accent="#4338ca" scoreBadge={`${sec9Total.toFixed(1)} / 80`}>
+            <SC title="9. Research Activity (80 Marks)" accent="#4338ca" scoreBadge={`${sec9Total.toFixed(1)} / 80`} hideGuideline>
               {/* A) Research Grants */}
               <SubsectionTitle>A) Research grants / projects from National funding agencies (10 Marks)</SubsectionTitle>
               <table style={T}>
@@ -1501,13 +1557,13 @@ export default function StandardMyAppraisal({
                       <td style={TD}><TI val={r.title} onChange={(v) => setResearchGrants((p) => p.map((row, j) => j === i ? { ...row, title: v } : row))} placeholder="Project Title" /></td>
                       <td style={TD}><TI val={r.fundingAgency} onChange={(v) => setResearchGrants((p) => p.map((row, j) => j === i ? { ...row, fundingAgency: v } : row))} placeholder="Funding Agency & Duration" /></td>
                       <td style={TDC}><TI val={r.grantAmount} onChange={(v) => setResearchGrants((p) => p.map((row, j) => j === i ? { ...row, grantAmount: v } : row))} center numeric placeholder="Grant (Lakhs)" /></td>
-                      <td style={TDS}><TI val={r.score} onChange={(v) => setResearchGrants((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric placeholder="5" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setResearchGrants((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={10} placeholder="0-10" /></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
               <RowBtns
-                onAdd={() => setResearchGrants((p) => [...p, { title: "", fundingAgency: "", grantAmount: "", score: "5" }])}
+                onAdd={() => setResearchGrants((p) => [...p, { title: "", fundingAgency: "", grantAmount: "", score: "" }])}
                 onDel={() => setResearchGrants((p) => p.length > 1 ? p.slice(0, -1) : p)}
                 canDel={researchGrants.length > 1}
               />
@@ -1531,7 +1587,7 @@ export default function StandardMyAppraisal({
                 </thead>
                 <tbody>
                   {ugcJournals.map((r, i) => {
-                    const pts = r.authorPosition === "1st Author" ? 3 : r.authorPosition === "2nd Author" ? 2 : 1;
+                    const rowMax = r.authorPosition === "1st Author" ? 3 : r.authorPosition === "2nd Author" ? 2 : 1;
                     return (
                       <tr key={i}>
                         <td style={TDC}>{i + 1}</td>
@@ -1546,14 +1602,14 @@ export default function StandardMyAppraisal({
                             <option value="3rd Author">3rd Author (1 Mark)</option>
                           </select>
                         </td>
-                        <td style={TDS}>{pts}</td>
+                        <td style={TDS}><TI val={r.score} onChange={(v) => setUgcJournals((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={rowMax} placeholder={`0-${rowMax}`} /></td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
               <RowBtns
-                onAdd={() => setUgcJournals((p) => [...p, { title: "", journal: "", publisher: "", issn: "", authorPosition: "1st Author" }])}
+                onAdd={() => setUgcJournals((p) => [...p, { title: "", journal: "", publisher: "", issn: "", authorPosition: "1st Author", score: "" }])}
                 onDel={() => setUgcJournals((p) => p.length > 1 ? p.slice(0, -1) : p)}
                 canDel={ugcJournals.length > 1}
               />
@@ -1578,7 +1634,7 @@ export default function StandardMyAppraisal({
                 <tbody>
                   {indexedJournals.map((r, i) => {
                     const pos = r.authorPosition;
-                    const pts = pos === "1st Author" ? 10 : pos === "2nd Author" ? 8 : pos === "3rd Author" ? 6 : 3;
+                    const rowMax = pos === "1st Author" ? 10 : pos === "2nd Author" ? 8 : pos === "3rd Author" ? 6 : 3;
                     return (
                       <tr key={i}>
                         <td style={TDC}>{i + 1}</td>
@@ -1594,14 +1650,14 @@ export default function StandardMyAppraisal({
                             <option value="Other">Other (3 Marks)</option>
                           </select>
                         </td>
-                        <td style={TDS}>{pts}</td>
+                        <td style={TDS}><TI val={r.score} onChange={(v) => setIndexedJournals((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={rowMax} placeholder={`0-${rowMax}`} /></td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
               <RowBtns
-                onAdd={() => setIndexedJournals((p) => [...p, { title: "", journal: "", citationIndex: "", hIndex: "", authorPosition: "1st Author" }])}
+                onAdd={() => setIndexedJournals((p) => [...p, { title: "", journal: "", citationIndex: "", hIndex: "", authorPosition: "1st Author", score: "" }])}
                 onDel={() => setIndexedJournals((p) => p.length > 1 ? p.slice(0, -1) : p)}
                 canDel={indexedJournals.length > 1}
               />
@@ -1625,13 +1681,13 @@ export default function StandardMyAppraisal({
                       <td style={TD}><TI val={r.title} onChange={(v) => setConferences((p) => p.map((row, j) => j === i ? { ...row, title: v } : row))} placeholder="Paper Title" /></td>
                       <td style={TD}><TI val={r.conference} onChange={(v) => setConferences((p) => p.map((row, j) => j === i ? { ...row, conference: v } : row))} placeholder="Conference Name" /></td>
                       <td style={TD}><TI val={r.proceedingsTitle} onChange={(v) => setConferences((p) => p.map((row, j) => j === i ? { ...row, proceedingsTitle: v } : row))} placeholder="Proceedings Title" /></td>
-                      <td style={TDS}><TI val={r.score} onChange={(v) => setConferences((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric placeholder="2.5" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setConferences((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={2.5} placeholder="0-2.5" /></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
               <RowBtns
-                onAdd={() => setConferences((p) => [...p, { title: "", conference: "", proceedingsTitle: "", score: "2.5" }])}
+                onAdd={() => setConferences((p) => [...p, { title: "", conference: "", proceedingsTitle: "", score: "" }])}
                 onDel={() => setConferences((p) => p.length > 1 ? p.slice(0, -1) : p)}
                 canDel={conferences.length > 1}
               />
@@ -1650,25 +1706,28 @@ export default function StandardMyAppraisal({
                   </tr>
                 </thead>
                 <tbody>
-                  {booksChapters.map((r, i) => (
-                    <tr key={i}>
-                      <td style={TDC}>{i + 1}</td>
-                      <td style={TD}>
-                        <select value={r.type} onChange={(e) => setBooksChapters((p) => p.map((row, j) => j === i ? { ...row, type: e.target.value } : row))} style={{ width: "100%", height: 32, border: "1px solid #cbd5e1", borderRadius: 4 }}>
-                          <option value="Book">Book (5 Marks)</option>
-                          <option value="Chapter">Chapter (2.5 Marks)</option>
-                        </select>
-                      </td>
-                      <td style={TD}><TI val={r.title} onChange={(v) => setBooksChapters((p) => p.map((row, j) => j === i ? { ...row, title: v } : row))} placeholder="Book Title" /></td>
-                      <td style={TD}><TI val={r.chapterName} onChange={(v) => setBooksChapters((p) => p.map((row, j) => j === i ? { ...row, chapterName: v } : row))} placeholder="Chapter Name" /></td>
-                      <td style={TD}><TI val={r.publisher} onChange={(v) => setBooksChapters((p) => p.map((row, j) => j === i ? { ...row, publisher: v } : row))} placeholder="Publisher" /></td>
-                      <td style={TDS}>{r.type === "Book" ? 5 : 2.5}</td>
-                    </tr>
-                  ))}
+                  {booksChapters.map((r, i) => {
+                    const rowMax = r.type === "Book" ? 5 : 2.5;
+                    return (
+                      <tr key={i}>
+                        <td style={TDC}>{i + 1}</td>
+                        <td style={TD}>
+                          <select value={r.type} onChange={(e) => setBooksChapters((p) => p.map((row, j) => j === i ? { ...row, type: e.target.value } : row))} style={{ width: "100%", height: 32, border: "1px solid #cbd5e1", borderRadius: 4 }}>
+                            <option value="Book">Book (5 Marks)</option>
+                            <option value="Chapter">Chapter (2.5 Marks)</option>
+                          </select>
+                        </td>
+                        <td style={TD}><TI val={r.title} onChange={(v) => setBooksChapters((p) => p.map((row, j) => j === i ? { ...row, title: v } : row))} placeholder="Book Title" /></td>
+                        <td style={TD}><TI val={r.chapterName} onChange={(v) => setBooksChapters((p) => p.map((row, j) => j === i ? { ...row, chapterName: v } : row))} placeholder="Chapter Name" /></td>
+                        <td style={TD}><TI val={r.publisher} onChange={(v) => setBooksChapters((p) => p.map((row, j) => j === i ? { ...row, publisher: v } : row))} placeholder="Publisher" /></td>
+                        <td style={TDS}><TI val={r.score} onChange={(v) => setBooksChapters((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={rowMax} placeholder={`0-${rowMax}`} /></td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
               <RowBtns
-                onAdd={() => setBooksChapters((p) => [...p, { type: "Book", title: "", chapterName: "", publisher: "" }])}
+                onAdd={() => setBooksChapters((p) => [...p, { type: "Book", title: "", chapterName: "", publisher: "", score: "" }])}
                 onDel={() => setBooksChapters((p) => p.length > 1 ? p.slice(0, -1) : p)}
                 canDel={booksChapters.length > 1}
               />
@@ -1702,13 +1761,13 @@ export default function StandardMyAppraisal({
                           <option value="Editorial Board Member">Editorial Board Member</option>
                         </select>
                       </td>
-                      <td style={TDS}><TI val={r.score} onChange={(v) => setReviewerEditorial((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric placeholder="5" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setReviewerEditorial((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={5} placeholder="0-5" /></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
               <RowBtns
-                onAdd={() => setReviewerEditorial((p) => [...p, { journalBook: "", level: "National", role: "Reviewer", score: "5" }])}
+                onAdd={() => setReviewerEditorial((p) => [...p, { journalBook: "", level: "National", role: "Reviewer", score: "" }])}
                 onDel={() => setReviewerEditorial((p) => p.length > 1 ? p.slice(0, -1) : p)}
                 canDel={reviewerEditorial.length > 1}
               />
@@ -1731,7 +1790,7 @@ export default function StandardMyAppraisal({
                 </thead>
                 <tbody>
                   {patentsCopyrights.map((r, i) => {
-                    const pts = r.type === "Utility Patent" ? 10 : r.type === "Design Patent" ? 5 : 2.5;
+                    const rowMax = r.type === "Utility Patent" ? 10 : r.type === "Design Patent" ? 5 : 2.5;
                     return (
                       <tr key={i}>
                         <td style={TDC}>{i + 1}</td>
@@ -1751,14 +1810,14 @@ export default function StandardMyAppraisal({
                             <option value="Granted">Granted</option>
                           </select>
                         </td>
-                        <td style={TDS}>{pts}</td>
+                        <td style={TDS}><TI val={r.score} onChange={(v) => setPatentsCopyrights((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={rowMax} placeholder={`0-${rowMax}`} /></td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
               <RowBtns
-                onAdd={() => setPatentsCopyrights((p) => [...p, { title: "", type: "Copyright", appNo: "", status: "Filed" }])}
+                onAdd={() => setPatentsCopyrights((p) => [...p, { title: "", type: "Copyright", appNo: "", status: "Filed", score: "" }])}
                 onDel={() => setPatentsCopyrights((p) => p.length > 1 ? p.slice(0, -1) : p)}
                 canDel={patentsCopyrights.length > 1}
               />
@@ -1783,13 +1842,13 @@ export default function StandardMyAppraisal({
                       <td style={TDC}>{i + 1}</td>
                       <td style={TD}><TI val={r.activity} onChange={(v) => setDevelopmentActs((p) => p.map((row, j) => j === i ? { ...row, activity: v } : row))} placeholder="Activity Name" /></td>
                       <td style={TDC}><TI val={r.fundingAmount} onChange={(v) => setDevelopmentActs((p) => p.map((row, j) => j === i ? { ...row, fundingAmount: v } : row))} center placeholder="Amount" /></td>
-                      <td style={TDS}><TI val={r.score} onChange={(v) => setDevelopmentActs((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric placeholder="5" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setDevelopmentActs((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={5} placeholder="0-5" /></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
               <RowBtns
-                onAdd={() => setDevelopmentActs((p) => [...p, { activity: "", fundingAmount: "", score: "5" }])}
+                onAdd={() => setDevelopmentActs((p) => [...p, { activity: "", fundingAmount: "", score: "" }])}
                 onDel={() => setDevelopmentActs((p) => p.length > 1 ? p.slice(0, -1) : p)}
                 canDel={developmentActs.length > 1}
               />
@@ -1811,13 +1870,13 @@ export default function StandardMyAppraisal({
                       <td style={TDC}>{i + 1}</td>
                       <td style={TD}><TI val={r.area} onChange={(v) => setConsultancyRows((p) => p.map((row, j) => j === i ? { ...row, area: v } : row))} placeholder="Consultancy Area" /></td>
                       <td style={TDC}><TI val={r.fundsGenerated} onChange={(v) => setConsultancyRows((p) => p.map((row, j) => j === i ? { ...row, fundsGenerated: v } : row))} center numeric placeholder="Funds (Rs)" /></td>
-                      <td style={TDS}><TI val={r.score} onChange={(v) => setConsultancyRows((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric placeholder="5" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setConsultancyRows((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={5} placeholder="0-5" /></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
               <RowBtns
-                onAdd={() => setConsultancyRows((p) => [...p, { area: "", fundsGenerated: "", score: "5" }])}
+                onAdd={() => setConsultancyRows((p) => [...p, { area: "", fundsGenerated: "", score: "" }])}
                 onDel={() => setConsultancyRows((p) => p.length > 1 ? p.slice(0, -1) : p)}
                 canDel={consultancyRows.length > 1}
               />
@@ -1839,13 +1898,13 @@ export default function StandardMyAppraisal({
                       <td style={TDC}>{i + 1}</td>
                       <td style={TD}><TI val={r.particular} onChange={(v) => setAwardsRows((p) => p.map((row, j) => j === i ? { ...row, particular: v } : row))} placeholder="Award Particulars" /></td>
                       <td style={TD}><TI val={r.agency} onChange={(v) => setAwardsRows((p) => p.map((row, j) => j === i ? { ...row, agency: v } : row))} placeholder="Awarding Agency" /></td>
-                      <td style={TDS}><TI val={r.score} onChange={(v) => setAwardsRows((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric placeholder="5" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setAwardsRows((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={5} placeholder="0-5" /></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
               <RowBtns
-                onAdd={() => setAwardsRows((p) => [...p, { particular: "", agency: "", score: "5" }])}
+                onAdd={() => setAwardsRows((p) => [...p, { particular: "", agency: "", score: "" }])}
                 onDel={() => setAwardsRows((p) => p.length > 1 ? p.slice(0, -1) : p)}
                 canDel={awardsRows.length > 1}
               />
@@ -1867,13 +1926,13 @@ export default function StandardMyAppraisal({
                       <td style={TDC}>{i + 1}</td>
                       <td style={TD}><TI val={r.achievement} onChange={(v) => setOtherAchievements((p) => p.map((row, j) => j === i ? { ...row, achievement: v } : row))} placeholder="Achievement Details" /></td>
                       <td style={TD}><TI val={r.level} onChange={(v) => setOtherAchievements((p) => p.map((row, j) => j === i ? { ...row, level: v } : row))} placeholder="Level of Achievement" /></td>
-                      <td style={TDS}><TI val={r.score} onChange={(v) => setOtherAchievements((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric placeholder="5" /></td>
+                      <td style={TDS}><TI val={r.score} onChange={(v) => setOtherAchievements((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={5} placeholder="0-5" /></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
               <RowBtns
-                onAdd={() => setOtherAchievements((p) => [...p, { achievement: "", level: "", score: "5" }])}
+                onAdd={() => setOtherAchievements((p) => [...p, { achievement: "", level: "", score: "" }])}
                 onDel={() => setOtherAchievements((p) => p.length > 1 ? p.slice(0, -1) : p)}
                 canDel={otherAchievements.length > 1}
               />
@@ -1883,7 +1942,7 @@ export default function StandardMyAppraisal({
 
           {/* SECTION 10: PERSONAL ATTRIBUTES */}
           {hodAppraisalTab === "sec10" && (
-            <SC title="10. Personal Attributes (10 Marks) (01 Mark each)" accent="#ec4899" scoreBadge={`${sec10Total.toFixed(1)} / 10`}>
+            <SC title="10. Personal Attributes (10 Marks) (01 Mark each)" accent="#ec4899" scoreBadge={`${sec10Total.toFixed(1)} / 10`} hideGuideline>
               <table style={T}>
                 <thead>
                   <tr>
@@ -1898,7 +1957,7 @@ export default function StandardMyAppraisal({
                       <td style={TDC}>{i + 1}</td>
                       <td style={{ ...TD, fontWeight: 700 }}>{r.attribute}</td>
                       <td style={TDS}>
-                        <TI val={r.score} onChange={(v) => setPersonalAttributes((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric placeholder="1" />
+                        <TI val={r.score} onChange={(v) => setPersonalAttributes((p) => p.map((row, j) => j === i ? { ...row, score: v } : row))} center numeric max={1} placeholder="0 or 1" />
                       </td>
                     </tr>
                   ))}
@@ -1910,7 +1969,7 @@ export default function StandardMyAppraisal({
 
           {/* SUMMARY OF EVALUATION MARKS */}
           {hodAppraisalTab === "summary" && (
-            <SC title="Summary of Evaluation Marks (300 Marks)" accent="#1e1b4b" scoreBadge={`${grandTotal.toFixed(1)} / 300`}>
+            <SC title="Summary of Evaluation Marks (300 Marks)" accent="#1e1b4b" scoreBadge={`${grandTotal.toFixed(1)} / 300`} hideGuideline>
               <table style={T}>
                 <thead>
                   <tr>
@@ -1949,13 +2008,61 @@ export default function StandardMyAppraisal({
               </table>
 
               <div style={{ marginTop: 24, padding: 16, background: "#f8fafc", borderRadius: 10, border: "1px solid #e2e8f0" }}>
-                <p style={{ margin: 0, fontSize: 13, color: "#334155", fontStyle: "italic", fontWeight: 600 }}>
-                  I hereby declare that, the information given above by me is true & correct to the best of my knowledge & belief.
-                </p>
+                <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: submitted ? "default" : "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={declarationChecked}
+                    disabled={submitted}
+                    onChange={(e) => setDeclarationChecked(e.target.checked)}
+                    style={{ marginTop: 3, width: 16, height: 16, flexShrink: 0 }}
+                  />
+                  <span style={{ fontSize: 13, color: "#334155", fontStyle: "italic", fontWeight: 600 }}>
+                    I hereby declare that, the information given above by me is true & correct to the best of my knowledge & belief.
+                  </span>
+                </label>
                 <div style={{ marginTop: 16, display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 700, color: "#475569" }}>
                   <div>Place: Kolhapur</div>
                   <div>Applicant Signature: {info.name || titleNameFallback}</div>
                 </div>
+
+                <div style={{ marginTop: 20, display: "flex", gap: 12, flexWrap: "wrap", borderTop: "1px solid #e2e8f0", paddingTop: 16 }}>
+                  <button
+                    type="button"
+                    onClick={handleGenerateReport}
+                    style={{ padding: "10px 20px", background: "#fff", color: "#1e1b4b", border: "1px solid #cbd5e1", borderRadius: 9, cursor: "pointer", fontWeight: 800, fontSize: 13, fontFamily: "inherit" }}
+                  >
+                    Generate Report
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSubmitAppraisal}
+                    disabled={!declarationChecked || submitted}
+                    style={{
+                      padding: "10px 20px",
+                      background: submitted ? "#94a3b8" : (!declarationChecked ? "#c7d2fe" : "#4f46e5"),
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: 9,
+                      cursor: (!declarationChecked || submitted) ? "not-allowed" : "pointer",
+                      fontWeight: 800,
+                      fontSize: 13,
+                      fontFamily: "inherit",
+                      boxShadow: submitted ? "none" : "0 4px 14px rgba(79,70,229,0.28)",
+                    }}
+                  >
+                    {submitted ? "Submitted" : "Submit Appraisal"}
+                  </button>
+                </div>
+                {submitted && (
+                  <div style={{ marginTop: 10, fontSize: 12, color: "#0f766e", fontWeight: 700 }}>
+                    Declaration recorded for this session. Backend submission for the DYPATU SAR form is not yet wired up — this does not send your appraisal to HOD/Dean review.
+                  </div>
+                )}
+                {!submitted && (
+                  <div style={{ marginTop: 10, fontSize: 11.5, color: "#94a3b8", fontWeight: 600 }}>
+                    Tick the declaration above to enable Submit.
+                  </div>
+                )}
               </div>
               <SectionNavFooter prevSection="sec10" onNavigate={handleMyAppraisalSectionChange} />
             </SC>

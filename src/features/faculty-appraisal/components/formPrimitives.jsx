@@ -562,7 +562,7 @@ export function SectionInfoButton({ titleText, customGuideline }) {
   );
 }
 
-export function SectionCard({ title, subtitle, accent = "#4f46e5", scoreBadge, children }) {
+export function SectionCard({ title, subtitle, accent = "#4f46e5", scoreBadge, children, hideGuideline = false }) {
   const displayTitle = stripMaxMarksFromTitle(title);
 
   return (
@@ -579,7 +579,7 @@ export function SectionCard({ title, subtitle, accent = "#4f46e5", scoreBadge, c
           <div>
             <div className="appraisal-part-title" style={{ fontWeight: 800, fontSize: 18, color: "#4f46e5", letterSpacing: 0, display: "flex", alignItems: "center" }}>
               <span>{displayTitle}</span>
-              <SectionInfoButton titleText={title} />
+              {!hideGuideline && <SectionInfoButton titleText={title} />}
             </div>
             {subtitle && <div style={{ color: "#64748b", fontSize: 13, marginTop: 4, lineHeight: 1.45, fontWeight: 500 }}>{subtitle}</div>}
           </div>
